@@ -1,11 +1,12 @@
 use clap::Parser;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 
 mod diff;
 use diff::{Diff, Hunk, Line};
 
 mod parser;
+mod patcher;
 
 #[derive(Parser, Debug)]
 #[command(author = "Tytoo", version, about, long_about = None)]
@@ -18,13 +19,17 @@ struct Args {
     in_place: bool,
     #[arg(long, default_value_t = true)]
     dry_run: bool,
-    #[arg(short, long, default_value_t = 2)]
+    #[arg(short, long, default_value_t = 0)]
     fuzziness: u8,
 }
 
 
 fn main() -> io::Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
+
+    if !args.in_place {
+        args.dry_run = true;
+    }
 
     println!("mend: A fuzzy diff applicator");
     println!("----------------------------");
@@ -32,7 +37,7 @@ fn main() -> io::Result<()> {
     let original_content = fs::read_to_string(&args.original_file)?;
     println!("[INFO] Read original file: {}", args.original_file);
 
-    let diff_content = match args.diff_file {
+    let diff_content = match &args.diff_file {
         Some(path) => {
             println!("[INFO] Read diff file: {}", path);
             fs::read_to_string(path)?
@@ -48,27 +53,31 @@ fn main() -> io::Result<()> {
     let parsed_diff = parser::parse_diff(&diff_content);
     println!("[INFO] Parsed diff with {} hunk(s).", parsed_diff.hunks.len());
 
-    if let Some(first_hunk) = parsed_diff.hunks.first() {
-        println!("[DEBUG] First hunk starts around original line {} and has {} lines of changes.",
-            first_hunk.original_start_line,
-            first_hunk.lines.len()
-        );
-    }
+    println!("[INFO] Applying patches with fuzziness level {}.", args.fuzziness);
+    match patcher::apply_diff(&original_content, &parsed_diff, args.fuzziness) {
+        Ok(patched_content) => {
+            println!("[SUCCESS] All hunks applied successfully.");
 
+            if args.dry_run {
+                println!("[INFO] Dry run. Patched content will be printed below.");
+                println!("--- START OF PATCHED FILE ---");
+                println!("{}", patched_content);
+                println!("---  END OF PATCHED FILE  ---");
+            }
 
-    println!("[TODO] Apply patches with fuzziness level {}.", args.fuzziness);
-
-
-    if args.dry_run {
-        println!("[INFO] Dry run enabled. Would write output to stdout.");
-    } else if args.in_place {
-        println!("[INFO] In-place enabled. Would modify {}.", args.original_file);
-    } else {
-        println!("[INFO] Would write output to a new file (not yet implemented).");
+            if args.in_place {
+                println!("[INFO] Writing changes to {} in-place.", args.original_file);
+                fs::write(&args.original_file, patched_content)?;
+            }
+        }
+        Err(e) => {
+            eprintln!("[ERROR] Could not apply patch: {}", e);
+            std::process::exit(1);
+        }
     }
 
     println!("----------------------------");
-    println!("Execution finished (parser complete).");
+    println!("Execution finished.");
 
     Ok(())
 }

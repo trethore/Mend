@@ -4,7 +4,7 @@ use regex::Regex;
 
 static HUNK_HEADER_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@").unwrap());
-.
+
 pub fn parse_diff(diff_content: &str) -> Diff {
     let mut diff = Diff::default();
 
