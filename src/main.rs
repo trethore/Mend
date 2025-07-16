@@ -1,31 +1,27 @@
-// In mend/src/main.rs
-
 use clap::Parser;
 use std::fs;
 use std::io::{self, Read};
 
-// Bring the diff data structures into scope from our new module.
 mod diff;
 use diff::{Diff, Hunk, Line};
+
+mod parser;
 
 #[derive(Parser, Debug)]
 #[command(author = "Tytoo", version, about, long_about = None)]
 struct Args {
     #[arg(index = 1)]
     original_file: String,
-
     #[arg(index = 2)]
     diff_file: Option<String>,
-
     #[arg(short, long)]
     in_place: bool,
-
     #[arg(long, default_value_t = true)]
     dry_run: bool,
-
     #[arg(short, long, default_value_t = 2)]
     fuzziness: u8,
 }
+
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
@@ -49,8 +45,15 @@ fn main() -> io::Result<()> {
         }
     };
 
-    let parsed_diff = Diff::default();
-    println!("[TODO] Parse the diff content.");
+    let parsed_diff = parser::parse_diff(&diff_content);
+    println!("[INFO] Parsed diff with {} hunk(s).", parsed_diff.hunks.len());
+
+    if let Some(first_hunk) = parsed_diff.hunks.first() {
+        println!("[DEBUG] First hunk starts around original line {} and has {} lines of changes.",
+            first_hunk.original_start_line,
+            first_hunk.lines.len()
+        );
+    }
 
 
     println!("[TODO] Apply patches with fuzziness level {}.", args.fuzziness);
@@ -65,7 +68,7 @@ fn main() -> io::Result<()> {
     }
 
     println!("----------------------------");
-    println!("Execution finished (skeleton).");
+    println!("Execution finished (parser complete).");
 
     Ok(())
 }
