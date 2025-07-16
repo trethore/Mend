@@ -1,0 +1,10 @@
+--- a/test/fixtures/original/utils.rs
++++ b/test/fixtures/original/utils.rs
+@@ -5,5 +5,6 @@
+ }
+
+ pub fn farewell(name: &str) -> String {
+-    format!("Goodbye, {}.", name)
++    // A more formal farewell.
++    format!("Goodbye and take care, {}.", name)
+ }

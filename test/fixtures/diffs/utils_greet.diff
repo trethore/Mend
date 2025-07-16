@@ -1,0 +1,12 @@
+--- a/test/fixtures/original/utils.rs
++++ b/test/fixtures/original/utils.rs
+@@ -1,5 +1,5 @@
+ // A simple utility module.
+
+ pub fn greet(name: &str) -> String {
+-    format!("Hello, {}!", name)
++    // A more enthusiastic greeting.
++    format!("Hello, {}! It is great to see you!", name)
+ }
+
+ pub fn farewell(name: &str) -> String {

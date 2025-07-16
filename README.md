@@ -26,17 +26,26 @@ This will compile `mend` and make it available in your shell.
 
 ## Usage
 
-### Basic Usage
+### Basic Usage (Explicit)
 
 Apply a diff file to an original file and print the result to the console (dry run):
 
 ```bash
 mend <path/to/original_file> <path/to/diff_file>
 ```
+---
+
+### Auto-Detecting the File to Patch
+
+If you omit the original file, `mend` will automatically detect it from the diff header (`--- a/path/to/file`):
+
+```bash
+mend <path/to/diff_file>
+```
 
 **Example:**
 ```bash
-mend src/main.rs my_changes.diff
+mend my_changes.diff
 ```
 
 ### Applying In-Place
@@ -44,16 +53,20 @@ mend src/main.rs my_changes.diff
 To modify the original file directly, use the `--in-place` or `-i` flag:
 
 ```bash
-mend --in-place src/main.rs my_changes.diff
+mend --in-place my_changes.diff
 ```
 _**Warning:** This will overwrite your original file. Use with care!_
 
 ### Piping from Stdin
 
-`mend` can also read the diff from standard input, which is useful for piping directly from another command (like an LLM client):
+`mend` can also read the diff from standard input. This is useful for piping directly from another command (like an LLM client).
 
 ```bash
-cat my_changes.diff | mend src/main.rs
+# Auto-detects the original file from the piped diff
+cat my_changes.diff | mend
+
+# You can also specify the original file explicitly
+cat my_changes.diff | mend path/to/original_file
 ```
 
 ### Controlling Fuzziness
@@ -66,7 +79,7 @@ You can manually control the matching strategy with the `--fuzziness` or `-f` fl
 
 ```bash
 # Run in the strictest possible mode
-mend --fuzziness 0 src/main.rs my_changes.diff
+mend --fuzziness 0 my_changes.diff
 ```
 
 ## How It Works

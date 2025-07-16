@@ -5,6 +5,9 @@ use regex::Regex;
 static HUNK_HEADER_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@").unwrap());
 
+static FILE_PATH_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^--- (?:a/)?([^\t\n]+)").unwrap());
+
 pub fn parse_diff(diff_content: &str) -> Diff {
     let mut diff = Diff::default();
 
@@ -40,4 +43,18 @@ fn parse_hunk_header(line: &str) -> (usize, usize) {
             Some((original?, new?))
         })
         .unwrap_or((1, 1))
+}
+
+pub fn find_target_file(diff_content: &str) -> Option<String> {
+    for line in diff_content.lines() {
+        if line.starts_with("--- ") {
+            if let Some(caps) = FILE_PATH_RE.captures(line) {
+                if let Some(path) = caps.get(1) {
+                    let path_str = path.as_str().trim();
+                    if path_str != "/dev/null" { return Some(path_str.to_string()); }
+                }
+            }
+        }
+    }
+    None
 }
