@@ -11,7 +11,7 @@ Standard `patch` tools often fail when applying AI-generated diffs because the l
     -   **Level 0 (Strict):** An exact, line-by-line match.
     -   **Level 1 (Whitespace Insensitive):** Ignores leading/trailing whitespace and empty lines, gracefully handling most formatting inconsistencies.
     -   **Level 2 (Anchor-Point Heuristic):** Uses the first and last lines of a change block as anchors to find the location, even if context lines in between have been slightly modified.
--   **Safe by Default:** Runs in "dry run" mode by default, printing the result to the console without modifying any files.
+-   **Safe by Default:** Applies patches in-place by default, but only overwrites the original file if the entire patch can be applied successfully. If any part fails, the original file is left untouched.
 
 ## Installation
 
@@ -26,52 +26,44 @@ This will compile `mend` and make it available in your shell.
 
 ## Usage
 
-### Basic Usage (Explicit)
+### Basic Usage: Applying a Patch
 
-Apply a diff file to an original file and print the result to the console (dry run):
-
-```bash
-mend <path/to/original_file> <path/to/diff_file>
-```
----
-
-### Auto-Detecting the File to Patch
-
-If you omit the original file, `mend` will automatically detect it from the diff header (`--- a/path/to/file`):
+By default, `mend` applies the patch directly to the file detected in the diff.
 
 ```bash
-mend <path/to/diff_file>
-```
-
-**Example:**
-```bash
+# Auto-detects the original file from the diff and modifies it in-place
 mend my_changes.diff
 ```
+*If patching fails, your original file will not be modified.*
 
-### Applying In-Place
+You can also specify the original file explicitly:
+```bash
+mend path/to/original_file path/to/diff_file
+```
 
-To modify the original file directly, use the `--in-place` or `-i` flag:
+### Dry Run / Debugging
+
+To see the result without modifying any files, use the `--debug` flag. This will print verbose logs and the final patched output to the console.
 
 ```bash
-mend --in-place my_changes.diff
+mend --debug my_changes.diff
 ```
-_**Warning:** This will overwrite your original file. Use with care!_
 
 ### Piping from Stdin
 
 `mend` can also read the diff from standard input. This is useful for piping directly from another command (like an LLM client).
 
 ```bash
-# Auto-detects the original file from the piped diff
+# Auto-detects the original file and applies the patch in-place
 cat my_changes.diff | mend
 
-# You can also specify the original file explicitly
-cat my_changes.diff | mend path/to/original_file
+# Use --debug for a dry run from stdin
+cat my_changes.diff | mend --debug
 ```
 
-### Controlling Fuzziness
+### Controlling Fuzziness and Verbosity
 
-You can manually control the matching strategy with the `--fuzziness` or `-f` flag.
+You can manually control the matching strategy with the `--fuzziness` or `-f` flag. The default is `2`.
 
 -   `--fuzziness 0`: Strict mode only. Fails if there isn't an exact match.
 -   `--fuzziness 1`: Allows whitespace and empty line differences.
@@ -80,6 +72,12 @@ You can manually control the matching strategy with the `--fuzziness` or `-f` fl
 ```bash
 # Run in the strictest possible mode
 mend --fuzziness 0 my_changes.diff
+```
+
+For more detailed logs about what `mend` is doing (without a full debug dry-run), use the `--verbose` or `-v` flag.
+
+```bash
+mend --verbose my_changes.diff
 ```
 
 ## How It Works

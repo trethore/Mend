@@ -7,19 +7,22 @@ pub fn apply_diff(
     original_content: &str,
     diff: &Diff,
     fuzziness: u8,
+    debug_mode: bool,
 ) -> Result<String, String> {
     let mut source_lines: Vec<String> = original_content.lines().map(String::from).collect();
 
     for (i, hunk) in diff.hunks.iter().enumerate() {
-        match find_hunk_location(&source_lines, hunk, fuzziness) {
+        match find_hunk_location(&source_lines, hunk, fuzziness, debug_mode) {
             Some((start_index, matched_length)) => {
-                println!(
-                    "[DEBUG] Hunk {}/{} matched at line {} (length {} lines)",
-                    i + 1,
-                    diff.hunks.len(),
-                    start_index + 1,
-                    matched_length
-                );
+                if debug_mode {
+                    println!(
+                        "[DEBUG] Hunk {}/{} matched at line {} (length {} lines)",
+                        i + 1,
+                        diff.hunks.len(),
+                        start_index + 1,
+                        matched_length
+                    );
+                }
                 source_lines = apply_hunk(&source_lines, hunk, start_index, matched_length);
             }
             None => {
@@ -39,6 +42,7 @@ fn find_hunk_location(
     source_lines: &[String],
     hunk: &Hunk,
     fuzziness: u8,
+    debug_mode: bool,
 ) -> Option<(usize, usize)> {
     let anchor_lines: Vec<&String> = hunk
         .lines
@@ -51,7 +55,9 @@ fn find_hunk_location(
 
     if anchor_lines.is_empty() { return None; }
 
-    println!("[DEBUG]   -> Trying strict match...");
+    if debug_mode {
+        println!("[DEBUG]   -> Trying strict match...");
+    }
     if let Some(start_index) = source_lines.windows(anchor_lines.len()).position(|window| {
         window.iter().zip(anchor_lines.iter()).all(|(s, a)| s == *a)
     }) {
@@ -69,7 +75,9 @@ fn find_hunk_location(
     if clean_anchor.is_empty() { return None; }
 
     if fuzziness >= 1 {
-        println!("[DEBUG]   -> Trying whitespace-insensitive match...");
+        if debug_mode {
+            println!("[DEBUG]   -> Trying whitespace-insensitive match...");
+        }
         for i in 0..source_lines.len() {
             let mut consumed_lines = 0;
             let mut clean_source_window = Vec::new();
@@ -90,7 +98,9 @@ fn find_hunk_location(
     }
 
     if fuzziness >= 2 {
-        println!("[DEBUG]   -> Trying anchor-point heuristic match...");
+        if debug_mode {
+            println!("[DEBUG]   -> Trying anchor-point heuristic match...");
+        }
 
         let top_anchor = clean_anchor.first()?;
         let bottom_anchor = clean_anchor.last()?;
@@ -110,7 +120,9 @@ fn find_hunk_location(
                         let candidate_block = &source_lines[start_index..=j];
 
                         let score = calculate_match_score(&clean_anchor, candidate_block);
-                        println!("[DEBUG]     - Candidate at lines {}-{} scored {:.2}", i + 1, j + 1, score);
+                        if debug_mode {
+                            println!("[DEBUG]     - Candidate at lines {}-{} scored {:.2}", i + 1, j + 1, score);
+                        }
 
                         if best_match.is_none() || score > best_match.as_ref().unwrap().2 {
                             best_match = Some((start_index, length, score));
@@ -122,7 +134,9 @@ fn find_hunk_location(
 
         if let Some((start, len, score)) = best_match {
             if score >= MATCH_SCORE_THRESHOLD {
-                println!("[DEBUG]   -> Best anchor-point match found with score {:.2}. Accepting.", score);
+                if debug_mode {
+                    println!("[DEBUG]   -> Best anchor-point match found with score {:.2}. Accepting.", score);
+                }
                 return Some((start, len));
             }
         }
@@ -149,7 +163,6 @@ fn calculate_match_score(clean_anchor: &[String], candidate_block: &[String]) ->
 
     matches as f32 / clean_anchor.len() as f32
 }
-
 
 fn apply_hunk(
     source_lines: &[String],

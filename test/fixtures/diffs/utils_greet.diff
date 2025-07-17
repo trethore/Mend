@@ -1,5 +1,5 @@
---- a/test/fixtures/original/utils.rs
-+++ b/test/fixtures/original/utils.rs
+--- a/utils.rs
++++ b/utils.rs
 @@ -1,5 +1,5 @@
  // A simple utility module.
 
