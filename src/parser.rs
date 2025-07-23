@@ -1,62 +1,71 @@
 use crate::diff::{FileDiff, Hunk, Line, Patch};
 
-const DIFF_HEADER: &str = "diff --git ";
-
 pub fn parse_patch(patch_content: &str) -> Result<Patch, String> {
     let mut patch = Patch::default();
     let mut current_file_diff: Option<FileDiff> = None;
 
-    for line in patch_content.lines() {
-        if line.starts_with(DIFF_HEADER) {
-            if let Some(file_diff) = current_file_diff.take() {
-                patch.diffs.push(file_diff);
+    let mut save_current_diff = |diff: Option<FileDiff>| {
+        if let Some(d) = diff {
+            if !d.hunks.is_empty() {
+                patch.diffs.push(d);
             }
+        }
+    };
+
+    for line in patch_content.lines() {
+        if line.starts_with("--- ") {
+            save_current_diff(current_file_diff.take());
             current_file_diff = Some(FileDiff::default());
-        } else if let Some(file_diff) = &mut current_file_diff {
-            if line.starts_with("--- a/") {
-                file_diff.old_file = line[6..].to_string();
-            } else if line.starts_with("+++ b/") {
-                file_diff.new_file = line[6..].to_string();
-            } else if line.starts_with("@@") {
-                if let Some(hunk_header) = line.strip_prefix("@@ ").and_then(|s| s.strip_suffix(" @@")) {
-                    let parts: Vec<&str> = hunk_header.split(' ').collect();
-                    if parts.len() == 2 {
-                        let old_range: Vec<&str> = parts[0].strip_prefix("-").unwrap_or("").split(',').collect();
-                        let new_range: Vec<&str> = parts[1].strip_prefix("+").unwrap_or("").split(',').collect();
+            if let Some(diff) = current_file_diff.as_mut() {
+                diff.old_file = line[4..].trim_start_matches("a/").to_string();
+            }
+            continue;
+        }
 
-                        let old_start = old_range[0].parse::<usize>().unwrap_or(0);
-                        let old_lines = old_range.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
-                        let new_start = new_range[0].parse::<usize>().unwrap_or(0);
-                        let new_lines = new_range.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
-
-                        file_diff.hunks.push(Hunk {
-                            _old_start: old_start,
-                            _old_lines: old_lines,
-                            new_start,
-                            _new_lines: new_lines,
-                            ..Default::default()
-                        });
-                    } else {
-                        file_diff.hunks.push(Hunk::default());
-                    }
-                } else {
-                    file_diff.hunks.push(Hunk::default());
+        if line.starts_with("+++ ") {
+            if current_file_diff.is_none() {
+                current_file_diff = Some(FileDiff::default());
+            }
+            if let Some(diff) = current_file_diff.as_mut() {
+                diff.new_file = line[4..].trim_start_matches("b/").to_string();
+                if diff.old_file.is_empty() {
+                    diff.old_file = diff.new_file.clone();
                 }
-            } else if let Some(current_hunk) = file_diff.hunks.last_mut() {
+            }
+            continue;
+        }
+
+        if current_file_diff.is_none()
+            && (line.starts_with("@@") || line.starts_with('+') || line.starts_with('-') || line.starts_with(' '))
+        {
+            current_file_diff = Some(FileDiff::default());
+        }
+
+        if let Some(diff) = current_file_diff.as_mut() {
+            if line.starts_with("@@") {
+                diff.hunks.push(Hunk::default());
+                continue;
+            }
+
+            if diff.hunks.is_empty() && (line.starts_with('+') || line.starts_with('-')) {
+                diff.hunks.push(Hunk::default());
+            }
+
+            if let Some(hunk) = diff.hunks.last_mut() {
                 if let Some(text) = line.strip_prefix('+') {
-                    current_hunk.lines.push(Line::Addition(text.to_string()));
+                    hunk.lines.push(Line::Addition(text.to_string()));
                 } else if let Some(text) = line.strip_prefix('-') {
-                    current_hunk.lines.push(Line::Removal(text.to_string()));
+                    hunk.lines.push(Line::Removal(text.to_string()));
                 } else if let Some(text) = line.strip_prefix(' ') {
-                    current_hunk.lines.push(Line::Context(text.to_string()));
+                    hunk.lines.push(Line::Context(text.to_string()));
+                } else {
+                    hunk.lines.push(Line::Context(line.to_string()));
                 }
             }
         }
     }
 
-    if let Some(file_diff) = current_file_diff.take() {
-        patch.diffs.push(file_diff);
-    }
+    save_current_diff(current_file_diff.take());
 
     Ok(patch)
 }

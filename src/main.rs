@@ -1,5 +1,6 @@
 use clap::Parser;
 use is_terminal::IsTerminal;
+use std::cmp::min;
 use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
@@ -7,6 +8,7 @@ use std::path::Path;
 mod diff;
 mod parser;
 mod patcher;
+use diff::FileDiff;
 use patcher::{FilePatchResult, PatchError};
 
 #[derive(Parser, Debug)]
@@ -19,14 +21,19 @@ Mend is a command-line tool to apply llm generated diffs using fuzzy matching.
 
 It can read a diff from a file or from standard input.
 
-Examples:
-  mend my_feature.diff
-  git diff | mend
-  cat some_change.patch | mend
+# Apply a patch, auto-detecting the target file from diff headers
+mend my_feature.diff
+
+# Explicitly provide the target file, ignoring diff headers
+mend src/main.rs my_changes.diff
+
+# Pipe a diff from stdin and apply to an explicit target file
+git diff | mend src/main.rs
 "#
 )]
 struct Args {
-    #[arg(index = 1)]
+    target_file: Option<String>,
+
     diff_file: Option<String>,
 
     #[arg(long)]
@@ -47,32 +54,84 @@ struct Args {
 
 fn read_user_input() -> String {
     let mut input = String::new();
-    io::stdin().read_line(&mut input).expect("Failed to read line");
+    io::stdin()
+        .read_line(&mut input)
+        .expect("Failed to read line");
     input.trim().to_string()
 }
+fn is_binary(path: &Path) -> io::Result<bool> {
+    let mut file = fs::File::open(path)?;
+    let mut buffer = [0; 1024];
+    let n = file.read(&mut buffer)?;
+    Ok(buffer[..n].contains(&0))
+}
+fn print_match_context(
+    source_lines: &[String],
+    hunk_match: &patcher::HunkMatch,
+    option_index: usize,
+) {
+    const CONTEXT_LINES: usize = 2;
+    eprintln!(
+        "\n> Option {} (Line {}, Score: {:.2})",
+        option_index,
+        hunk_match.start_index + 1,
+        hunk_match.score
+    );
+    let start_line = hunk_match.start_index;
+    let context_before_start = start_line.saturating_sub(CONTEXT_LINES);
+    for i in context_before_start..start_line {
+        eprintln!("  {:>4} | {}", i + 1, source_lines[i]);
+    }
+    eprintln!(
+        "  ---- | --- (Patch would be applied here, replacing {} lines) ---",
+        hunk_match.matched_length
+    );
+    let end_line = start_line + hunk_match.matched_length;
+    let context_after_end = min(source_lines.len(), end_line + CONTEXT_LINES);
+    for i in end_line..context_after_end {
+        if i < source_lines.len() {
+            eprintln!("  {:>4} | {}", i + 1, source_lines[i]);
+        }
+    }
+}
+
 
 fn resolve_file_diff_interactively(
-    file_diff: &diff::FileDiff,
+    file_diff: &FileDiff,
+    cli_target_path: &Option<String>,
     fuzziness: u8,
     debug_mode: bool,
     match_threshold: f32,
 ) -> Result<Option<FilePatchResult>, PatchError> {
-    if file_diff.new_file == "/dev/null" {
-        return Ok(Some(FilePatchResult::Deleted {
-            path: file_diff.old_file.clone(),
-        }));
+    let old_path = cli_target_path.clone().unwrap_or_else(|| file_diff.old_file.clone());
+    let new_path = cli_target_path.clone().unwrap_or_else(|| file_diff.new_file.clone());
+
+    if old_path.is_empty() && new_path != "/dev/null" {
+        return Err(PatchError::IOError("Could not determine target file. The diff has no file headers. Please specify the target file: `mend <TARGET_FILE> [DIFF_FILE]`".to_string()));
     }
 
-    let mut source_lines: Vec<String> = if file_diff.old_file == "/dev/null" {
+    if new_path == "/dev/null" {
+        return Ok(Some(FilePatchResult::Deleted { path: old_path }));
+    }
+
+    let mut source_lines: Vec<String> = if old_path == "/dev/null" {
         Vec::new()
     } else {
-        fs::read_to_string(&file_diff.old_file)?
+        let path = Path::new(&old_path);
+        if !path.exists() {
+             return Err(PatchError::IOError(format!("Original file not found: {}", path.display())));
+        }
+        if is_binary(path).unwrap_or(false) {
+            eprintln!("[WARN] Skipping binary file: {}", old_path);
+            return Ok(None);
+        }
+        fs::read_to_string(path)?
             .lines()
             .map(String::from)
             .collect()
     };
 
-    for (i, hunk) in file_diff.hunks.iter().enumerate() {
+    for (i, hunk) in file_diff.hunks.iter().enumerate().rev() {
         loop {
             let possible_matches = patcher::find_hunk_location(
                 &source_lines,
@@ -81,16 +140,14 @@ fn resolve_file_diff_interactively(
                 debug_mode,
                 match_threshold,
             );
-
             if possible_matches.is_empty() {
-                eprintln!("[ERROR] Failed to apply hunk {} for file {}. No matching context found.", i + 1, file_diff.new_file);
+                eprintln!("[ERROR] Failed to apply hunk {} for file {}. No matching context found.", i + 1, new_path);
                 eprintln!("Do you want to [s]kip this hunk or [a]bort the process? (s/a)");
                 let choice = read_user_input();
-                if choice.to_lowercase() == "s" {
-                    break;
-                } else if choice.to_lowercase() == "a" {
+                if choice.to_lowercase() == "s" { break; }
+                else if choice.to_lowercase() == "a" {
                     return Err(PatchError::HunkApplicationFailed {
-                        file_path: file_diff.new_file.clone(),
+                        file_path: new_path.clone(),
                         hunk_index: i,
                         reason: "User aborted due to unresolvable hunk.".to_string(),
                     });
@@ -99,63 +156,25 @@ fn resolve_file_diff_interactively(
                     continue;
                 }
             } else if possible_matches.len() > 1 {
-                eprintln!("[ERROR] Ambiguous match for hunk {} in file {}. Possible locations:", i + 1, file_diff.new_file);
+                eprintln!("[ERROR] Ambiguous match for hunk {} in file {}. Possible locations:", i + 1, new_path);
                 for (idx, m) in possible_matches.iter().enumerate() {
-                    eprintln!("  {}. Line {} (Score: {:.2})", idx + 1, m.start_index + 1, m.score);
+                    print_match_context(&source_lines, m, idx + 1);
                 }
-                eprintln!("Enter the index of the correct location, [s]kip this hunk, or [a]bort: ");
+                eprintln!("\nEnter the index of the correct location, [s]kip this hunk, or [a]bort: ");
                 let choice = read_user_input();
-                if choice.to_lowercase() == "s" {
-                    break;
-                } else if choice.to_lowercase() == "a" {
-                    return Err(PatchError::AmbiguousMatch {
-                        file_path: file_diff.new_file.clone(),
-                        hunk_index: i,
-                    });
+                if choice.to_lowercase() == "s" { break; }
+                else if choice.to_lowercase() == "a" {
+                    return Err(PatchError::AmbiguousMatch { file_path: new_path.clone(), hunk_index: i });
                 } else if let Ok(index) = choice.parse::<usize>() {
                     if index > 0 && index <= possible_matches.len() {
                         let chosen_match = &possible_matches[index - 1];
-                        if debug_mode {
-                            println!(
-                                "[DEBUG] Hunk {}/{} matched at line {} (length {} lines)",
-                                i + 1,
-                                file_diff.hunks.len(),
-                                chosen_match.start_index + 1,
-                                chosen_match.matched_length
-                            );
-                        }
-                        source_lines = patcher::apply_hunk(
-                            &source_lines,
-                            hunk,
-                            chosen_match.start_index,
-                            chosen_match.matched_length,
-                        );
+                        source_lines = patcher::apply_hunk(&source_lines, hunk, chosen_match.start_index, chosen_match.matched_length);
                         break;
-                    } else {
-                        eprintln!("Invalid index. Please enter a valid number, 's', or 'a'.");
-                        continue;
-                    }
-                } else {
-                    eprintln!("Invalid choice. Please enter a valid number, 's', or 'a'.");
-                    continue;
-                }
+                    } else { eprintln!("Invalid index. Please enter a valid number, 's', or 'a'."); continue; }
+                } else { eprintln!("Invalid choice. Please enter a valid number, 's', or 'a'."); continue; }
             } else {
                 let chosen_match = &possible_matches[0];
-                if debug_mode {
-                    println!(
-                        "[DEBUG] Hunk {}/{} matched at line {} (length {} lines)",
-                        i + 1,
-                        file_diff.hunks.len(),
-                        chosen_match.start_index + 1,
-                        chosen_match.matched_length
-                    );
-                }
-                source_lines = patcher::apply_hunk(
-                    &source_lines,
-                    hunk,
-                    chosen_match.start_index,
-                    chosen_match.matched_length,
-                );
+                source_lines = patcher::apply_hunk(&source_lines, hunk, chosen_match.start_index, chosen_match.matched_length);
                 break;
             }
         }
@@ -163,22 +182,43 @@ fn resolve_file_diff_interactively(
 
     let new_content = source_lines.join("\n");
 
-    if file_diff.old_file == "/dev/null" {
-        Ok(Some(FilePatchResult::Created {
-            path: file_diff.new_file.clone(),
-            new_content,
-        }))
+    if old_path == "/dev/null" {
+        Ok(Some(FilePatchResult::Created { path: new_path, new_content }))
     } else {
-        Ok(Some(FilePatchResult::Modified {
-            path: file_diff.new_file.clone(),
-            new_content,
-        }))
+        Ok(Some(FilePatchResult::Modified { path: new_path, new_content }))
     }
 }
 
+fn apply_changes(results: &[FilePatchResult]) -> io::Result<()> {
+    for result in results {
+        match result {
+            FilePatchResult::Modified { path, new_content } => {
+                fs::write(path, new_content)?;
+            }
+            FilePatchResult::Created { path, new_content } => {
+                if let Some(parent) = Path::new(path).parent() {
+                    if !parent.exists() {
+                        fs::create_dir_all(parent)?;
+                    }
+                }
+                fs::write(path, new_content)?;
+            }
+            FilePatchResult::Deleted { path } => {
+                fs::remove_file(path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+
 fn main() -> io::Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
     let is_verbose = args.verbose || args.debug;
+
+    if args.target_file.is_some() && args.diff_file.is_none() {
+        args.diff_file = args.target_file.take();
+    }
 
     if is_verbose {
         println!("mend: A fuzzy diff applicator");
@@ -187,21 +227,17 @@ fn main() -> io::Result<()> {
 
     let diff_content = match args.diff_file {
         Some(path) => {
-            if is_verbose {
-                println!("[INFO] Reading diff from file: {}", path);
-            }
+            if is_verbose { println!("[INFO] Reading diff from file: {}", path); }
             fs::read_to_string(path)?
         }
         None => {
             if io::stdin().is_terminal() {
-                eprintln!("[ERROR] No diff file specified and stdin is a terminal.");
-                eprintln!("Usage: mend <DIFF_FILE>");
-                eprintln!("Or pipe from stdin: git diff | mend");
+                eprintln!("[ERROR] No diff file or stdin pipe detected.");
+                eprintln!("Usage: mend [TARGET_FILE] <DIFF_FILE>");
+                eprintln!("Or pipe from stdin: git diff | mend [TARGET_FILE]");
                 std::process::exit(1);
             }
-            if is_verbose {
-                println!("[INFO] Reading diff from stdin...");
-            }
+            if is_verbose { println!("[INFO] Reading diff from stdin..."); }
             let mut buffer = String::new();
             io::stdin().read_to_string(&mut buffer)?;
             if buffer.is_empty() {
@@ -219,91 +255,46 @@ fn main() -> io::Result<()> {
             std::process::exit(1);
         }
     };
-
     if is_verbose {
-        println!(
-            "[INFO] Parsed patch with {} file diff(s).",
-            patch.diffs.len()
-        );
-        println!(
-            "[INFO] Applying patches with fuzziness level {}.",
-            args.fuzziness
-        );
+        println!("[INFO] Parsed patch with {} file diff(s).", patch.diffs.len());
+        println!("[INFO] Applying patches with fuzziness level {}.", args.fuzziness);
     }
-
     let mut all_patch_results: Vec<FilePatchResult> = Vec::new();
-
     for (i, file_diff) in patch.diffs.iter().enumerate() {
         if is_verbose {
-            println!("[INFO] Processing file diff {}/{} for file {}", i + 1, patch.diffs.len(), file_diff.new_file);
+            println!("[INFO] Processing file diff {}/{} for file '{}'", i + 1, patch.diffs.len(),
+                args.target_file.as_deref().unwrap_or(&file_diff.new_file));
         }
-        match resolve_file_diff_interactively(file_diff, args.fuzziness, args.debug, args.match_threshold) {
-            Ok(Some(result)) => {
-                all_patch_results.push(result);
-            }
-            Ok(None) => {
-                // do nothing.
-            }
+        match resolve_file_diff_interactively(file_diff, &args.target_file, args.fuzziness, args.debug, args.match_threshold) {
+            Ok(Some(result)) => { all_patch_results.push(result); }
+            Ok(None) => {}
             Err(e) => {
                 eprintln!("[ERROR] Could not apply patch: {}", e);
+                eprintln!("[INFO] No files were changed.");
                 std::process::exit(1);
             }
         }
     }
-
-    if args.dry_run {
+    if args.dry_run || args.debug {
         println!("\n[DRY RUN] The following changes would be applied:");
         for result in all_patch_results {
             match result {
-                FilePatchResult::Modified { path, .. } => {
-                    println!("  - [MODIFIED] {}", path);
-                }
-                FilePatchResult::Created { path, .. } => {
-                    println!("  - [CREATED]  {}", path);
-                }
-                FilePatchResult::Deleted { path } => {
-                    println!("  - [DELETED]  {}", path);
-                }
+                FilePatchResult::Modified { path, .. } => println!("  - [MODIFIED] {}", path),
+                FilePatchResult::Created { path, .. } => println!("  - [CREATED]  {}", path),
+                FilePatchResult::Deleted { path } => println!("  - [DELETED]  {}", path),
             }
         }
     } else {
-        for result in all_patch_results {
-            match result {
-                FilePatchResult::Modified { path, new_content } => {
-                    if let Err(e) = fs::write(&path, new_content) {
-                        eprintln!("[ERROR] Failed to write to file {}: {}", path, e);
-                        std::process::exit(1);
-                    }
-                }
-                FilePatchResult::Created { path, new_content } => {
-                    if let Some(parent) = Path::new(&path).parent() {
-                        if !parent.exists() {
-                            if let Err(e) = fs::create_dir_all(parent) {
-                                eprintln!("[ERROR] Failed to create directory {}: {}", parent.display(), e);
-                                std::process::exit(1);
-                            }
-                        }
-                    }
-                    if let Err(e) = fs::write(&path, new_content) {
-                        eprintln!("[ERROR] Failed to create file {}: {}", path, e);
-                        std::process::exit(1);
-                    }
-                }
-                FilePatchResult::Deleted { path } => {
-                    if let Err(e) = fs::remove_file(&path) {
-                        eprintln!("[ERROR] Failed to delete file {}: {}", path, e);
-                        std::process::exit(1);
-                    }
-                }
-            }
+        if let Err(e) = apply_changes(&all_patch_results) {
+            eprintln!("[ERROR] A failure occurred while writing changes to disk: {}", e);
+            eprintln!("The patching process was aborted. Some files may have been changed.");
+            std::process::exit(1);
         }
         println!("Successfully applied patch.");
     }
-
     if is_verbose {
         println!("----------------------------");
         println!("Execution finished.");
     }
-
     Ok(())
 }
