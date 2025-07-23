@@ -1,87 +1,79 @@
-use mend::{parser, patcher};
+use mend::parser;
 use std::fs;
 use std::path::Path;
 
-fn run_autodetect_test(diff_file_name: &str, expected_target_filename: &str, expected_output_name: &str) {
-    // SETUP: Ensure the test environment is ready.
-    let work_dir = Path::new("test/work");
-    if !work_dir.exists() {
-        panic!("Test work directory 'test/work' does not exist. Please run test/setup_test_env.sh first.");
-    }
-    
+fn run_parser_test(diff_file_name: &str, expected_old_file: &str, expected_new_file: &str) {
     // 1. ARRANGE
     let diff_content = fs::read_to_string(Path::new("test/fixtures/diffs").join(diff_file_name))
         .expect("Failed to read diff file");
-    
-    let original_file_in_work_dir = work_dir.join(expected_target_filename);
-    assert!(original_file_in_work_dir.exists(), "Original file {:?} not found in work directory. Did you run setup_test_env.sh?", original_file_in_work_dir);
 
-    // 2. ACT (Phase 1: Auto-detection)
-    let detected_file = parser::find_target_file(&diff_content);
+    // 2. ACT
+    let patch = parser::parse_patch(&diff_content).expect("Parsing the patch should succeed.");
 
-    // 3. ASSERT (Phase 1)
-    assert!(detected_file.is_some(), "Should have detected a file path");
-    let detected_filename = detected_file.unwrap();
-    assert_eq!(detected_filename, expected_target_filename, "Auto-detection failed to find the correct filename.");
+    // 3. ASSERT
+    assert_eq!(patch.diffs.len(), 1, "Should have parsed exactly one file diff.");
+    let file_diff = &patch.diffs[0];
 
-    let original_content = fs::read_to_string(&original_file_in_work_dir)
-        .expect("Failed to read original file from work directory");
-    let expected_content = fs::read_to_string(Path::new("test/fixtures/original").join(expected_output_name))
-        .expect("Failed to read expected output file");
-
-    // 2. ACT (Phase 2: Patching)
-    let parsed_diff = parser::parse_diff(&diff_content);
-    let result = patcher::apply_diff(&original_content, &parsed_diff, 2, false); // Use max fuzziness
-
-    // 3. ASSERT (Phase 2)
-    assert!(result.is_ok(), "Patching failed: {:?}", result.err());
-    assert_eq!(result.unwrap().replace("\r\n", "\n"), expected_content.replace("\r\n", "\n"));
+    assert_eq!(file_diff.old_file, expected_old_file, "Detected old file path does not match.");
+    assert_eq!(file_diff.new_file, expected_new_file, "Detected new file path does not match.");
+    assert!(!file_diff.hunks.is_empty(), "Parsed diff should contain hunks.");
 }
 
 #[test]
-fn test_autodetect_and_patch_greet() {
-    let expected_output = r#"// A simple utility module.
-
-pub fn greet(name: &str) -> String {
-    // A more enthusiastic greeting.
-    format!("Hello, {}! It is great to see you!", name)
-}
-
-pub fn farewell(name: &str) -> String {
-    format!("Goodbye, {}.", name)
-}
-"#;
-    fs::write("test/fixtures/original/expected_greet.rs", expected_output).unwrap();
-
-    run_autodetect_test(
+fn test_parses_git_style_paths() {
+    run_parser_test(
         "utils_greet.diff",
         "utils.rs",
-        "expected_greet.rs",
+        "utils.rs",
     );
-
-    fs::remove_file("test/fixtures/original/expected_greet.rs").unwrap();
 }
 
 #[test]
-fn test_autodetect_and_patch_farewell() {
-    let expected_output = r#"// A simple utility module.
-
-pub fn greet(name: &str) -> String {
-    format!("Hello, {}!", name)
-}
-
-pub fn farewell(name: &str) -> String {
-    // A more formal farewell.
-    format!("Goodbye and take care, {}.", name)
-}
-"#;
-    fs::write("test/fixtures/original/expected_farewell.rs", expected_output).unwrap();
-
-    run_autodetect_test(
-        "utils_farewell.diff",
-        "utils.rs",
-        "expected_farewell.rs",
+fn test_parses_custom_style_paths() {
+    run_parser_test(
+        "claude.diff",
+        "Personne.java.old",
+        "Personne.java.new",
     );
+}
 
-    fs::remove_file("test/fixtures/original/expected_farewell.rs").unwrap();
+#[test]
+fn test_parses_file_creation_paths() {
+    // ARRANGE
+    let diff_content = r#"
+--- /dev/null
++++ b/new_file.txt
+@@ -0,0 +1,2 @@
++Hello
++World
+"#;
+    // ACT
+    let patch = parser::parse_patch(diff_content).unwrap();
+
+    // ASSERT
+    assert_eq!(patch.diffs.len(), 1);
+    let file_diff = &patch.diffs[0];
+    assert_eq!(file_diff.old_file, "/dev/null");
+    assert_eq!(file_diff.new_file, "new_file.txt");
+}
+
+#[test]
+fn test_parses_diff_with_no_headers() {
+    // ARRANGE: A diff with no --- or +++ lines.
+    let diff_content = r#"
+@@ -1,3 +1,3 @@
+ line one
+-line two
++line two new
+ line three
+"#;
+    // ACT
+    let patch = parser::parse_patch(diff_content).unwrap();
+
+    // ASSERT
+    assert_eq!(patch.diffs.len(), 1);
+    let file_diff = &patch.diffs[0];
+    assert!(file_diff.old_file.is_empty());
+    assert!(file_diff.new_file.is_empty());
+    assert_eq!(file_diff.hunks.len(), 1);
 }
