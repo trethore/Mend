@@ -2,8 +2,10 @@ use clap::Parser;
 use is_terminal::IsTerminal;
 use std::cmp::min;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Error as IoError, ErrorKind, Read};
 use std::path::Path;
+
+use clipboard::{ClipboardContext, ClipboardProvider};
 
 mod diff;
 mod parser;
@@ -31,12 +33,19 @@ mend src/main.rs my_changes.diff
 
 # Pipe a diff from stdin and apply to an explicit target file
 git diff | mend src/main.rs
+
+# Read diff from clipboard and apply to an explicit target file
+mend -c src/main.rs
 "#
 )]
 struct Args {
     target_file: Option<String>,
 
+    #[arg(conflicts_with = "clipboard")]
     diff_file: Option<String>,
+
+    #[arg(short, long, conflicts_with = "diff_file")]
+    clipboard: bool,
 
     #[arg(short, long)]
     debug: bool,
@@ -200,7 +209,7 @@ fn main() -> io::Result<()> {
 
     let is_verbose = args.verbose || args.debug;
 
-    if args.target_file.is_some() && args.diff_file.is_none() {
+    if !args.clipboard && args.target_file.is_some() && args.diff_file.is_none() {
         args.diff_file = args.target_file.take();
     }
 
@@ -209,28 +218,46 @@ fn main() -> io::Result<()> {
         println!("----------------------------");
     }
 
-    let diff_content = match args.diff_file {
-        Some(path) => {
-            if is_verbose { println!("[INFO] Reading diff from file: {}", path); }
-            fs::read_to_string(path)?
+    let diff_content = if args.clipboard {
+        if is_verbose {
+            println!("[INFO] Reading diff from clipboard...");
         }
-        None => {
-            if io::stdin().is_terminal() {
-                eprintln!("[ERROR] No diff file or stdin pipe detected.");
-                eprintln!("Usage: mend [TARGET_FILE] <DIFF_FILE>");
-                eprintln!("Or pipe from stdin: git diff | mend [TARGET_FILE]");
-                std::process::exit(1);
+        let mut ctx: ClipboardContext = ClipboardProvider::new().map_err(|e| {
+            IoError::new(ErrorKind::Other, format!("Failed to initialize clipboard: {}", e))
+        })?;
+        ctx.get_contents().map_err(|e| {
+            IoError::new(ErrorKind::Other, format!("Failed to read from clipboard: {}", e))
+        })?
+    } else {
+        match args.diff_file {
+            Some(path) => {
+                if is_verbose {
+                    println!("[INFO] Reading diff from file: {}", path);
+                }
+                fs::read_to_string(path)?
             }
-            if is_verbose { println!("[INFO] Reading diff from stdin..."); }
-            let mut buffer = String::new();
-            io::stdin().read_to_string(&mut buffer)?;
-            if buffer.is_empty() {
-                eprintln!("[ERROR] Diff content from stdin was empty.");
-                std::process::exit(1);
+            None => {
+                if io::stdin().is_terminal() {
+                    eprintln!("[ERROR] No diff file, clipboard flag, or stdin pipe detected.");
+                    eprintln!("Usage: mend [TARGET_FILE] <DIFF_FILE>");
+                    eprintln!("Or:    mend -c [TARGET_FILE]");
+                    eprintln!("Or pipe from stdin: git diff | mend [TARGET_FILE]");
+                    std::process::exit(1);
+                }
+                if is_verbose {
+                    println!("[INFO] Reading diff from stdin...");
+                }
+                let mut buffer = String::new();
+                io::stdin().read_to_string(&mut buffer)?;
+                buffer
             }
-            buffer
         }
     };
+
+    if diff_content.is_empty() {
+        eprintln!("[ERROR] The diff content is empty.");
+        std::process::exit(1);
+    }
 
     let patch = match parser::parse_patch(&diff_content) {
         Ok(patch) => patch,
@@ -246,11 +273,23 @@ fn main() -> io::Result<()> {
     let mut all_patch_results: Vec<FilePatchResult> = Vec::new();
     for (i, file_diff) in patch.diffs.iter().enumerate() {
         if is_verbose {
-            println!("[INFO] Processing file diff {}/{} for file '{}'", i + 1, patch.diffs.len(),
-                args.target_file.as_deref().unwrap_or(&file_diff.new_file));
+            println!(
+                "[INFO] Processing file diff {}/{} for file '{}'",
+                i + 1,
+                patch.diffs.len(),
+                args.target_file.as_deref().unwrap_or(&file_diff.new_file)
+            );
         }
-        match resolve_file_diff_interactively(file_diff, &args.target_file, args.fuzziness, args.debug, args.match_threshold) {
-            Ok(Some(result)) => { all_patch_results.push(result); }
+        match resolve_file_diff_interactively(
+            file_diff,
+            &args.target_file,
+            args.fuzziness,
+            args.debug,
+            args.match_threshold,
+        ) {
+            Ok(Some(result)) => {
+                all_patch_results.push(result);
+            }
             Ok(None) => {}
             Err(e) => {
                 eprintln!("[ERROR] Could not apply patch: {}", e);
