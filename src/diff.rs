@@ -11,6 +11,13 @@ pub struct Hunk {
 }
 
 #[derive(Debug, Default)]
-pub struct Diff {
+pub struct FileDiff {
+    pub old_file: String,
+    pub new_file: String,
     pub hunks: Vec<Hunk>,
+}
+
+#[derive(Debug, Default)]
+pub struct Patch {
+    pub diffs: Vec<FileDiff>,
 }

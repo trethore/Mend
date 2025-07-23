@@ -1,40 +1,39 @@
-use crate::diff::{Diff, Hunk, Line};
-use once_cell::sync::Lazy;
-use regex::Regex;
+use crate::diff::{FileDiff, Hunk, Line, Patch};
 
-static FILE_PATH_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^--- (?:a/)?([^\t\n]+)").unwrap());
+const DIFF_HEADER: &str = "diff --git ";
 
-pub fn parse_diff(diff_content: &str) -> Diff {
-    let mut diff = Diff::default();
+pub fn parse_patch(patch_content: &str) -> Result<Patch, String> {
+    let mut patch = Patch::default();
+    let mut current_file_diff: Option<FileDiff> = None;
 
-    for line in diff_content.lines() {
-        if line.starts_with("@@") {
-            diff.hunks.push(Hunk::default());
-        } else if let Some(current_hunk) = diff.hunks.last_mut() {
-            if let Some(text) = line.strip_prefix('+') {
-                current_hunk.lines.push(Line::Addition(text.to_string()));
-            } else if let Some(text) = line.strip_prefix('-') {
-                current_hunk.lines.push(Line::Removal(text.to_string()));
-            } else if let Some(text) = line.strip_prefix(' ') {
-                current_hunk.lines.push(Line::Context(text.to_string()));
+    for line in patch_content.lines() {
+        if line.starts_with(DIFF_HEADER) {
+            if let Some(file_diff) = current_file_diff.take() {
+                patch.diffs.push(file_diff);
             }
-        }
-    }
-
-    diff
-}
-
-pub fn find_target_file(diff_content: &str) -> Option<String> {
-    for line in diff_content.lines() {
-        if line.starts_with("--- ") {
-            if let Some(caps) = FILE_PATH_RE.captures(line) {
-                if let Some(path) = caps.get(1) {
-                    let path_str = path.as_str().trim();
-                    if path_str != "/dev/null" { return Some(path_str.to_string()); }
+            current_file_diff = Some(FileDiff::default());
+        } else if let Some(file_diff) = &mut current_file_diff {
+            if line.starts_with("--- a/") {
+                file_diff.old_file = line[6..].to_string();
+            } else if line.starts_with("+++ b/") {
+                file_diff.new_file = line[6..].to_string();
+            } else if line.starts_with("@@") {
+                file_diff.hunks.push(Hunk::default());
+            } else if let Some(current_hunk) = file_diff.hunks.last_mut() {
+                if let Some(text) = line.strip_prefix('+') {
+                    current_hunk.lines.push(Line::Addition(text.to_string()));
+                } else if let Some(text) = line.strip_prefix('-') {
+                    current_hunk.lines.push(Line::Removal(text.to_string()));
+                } else if let Some(text) = line.strip_prefix(' ') {
+                    current_hunk.lines.push(Line::Context(text.to_string()));
                 }
             }
         }
     }
-    None
+
+    if let Some(file_diff) = current_file_diff.take() {
+        patch.diffs.push(file_diff);
+    }
+
+    Ok(patch)
 }

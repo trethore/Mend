@@ -11,8 +11,6 @@ mod patcher;
 #[command(author = "Tytoo", version, about, long_about = None)]
 struct Args {
     #[arg(index = 1)]
-    original_file: Option<String>,
-    #[arg(index = 2)]
     diff_file: Option<String>,
 
     #[arg(long)]
@@ -34,21 +32,7 @@ fn main() -> io::Result<()> {
         println!("----------------------------");
     }
 
-    let (mut original_file_path, diff_file_path) =
-        match (args.original_file, args.diff_file) {
-            (Some(orig), Some(diff)) => (Some(orig), Some(diff)),
-            (Some(file), None) => {
-                if io::stdin().is_terminal() {
-                    (None, Some(file))
-                } else {
-                    (Some(file), None)
-                }
-            }
-            (None, None) => (None, None),
-            (None, Some(_)) => unreachable!(),
-        };
-
-    let diff_content = match diff_file_path {
+    let diff_content = match args.diff_file {
         Some(path) => {
             if is_verbose {
                 println!("[INFO] Reading diff from file: {}", path);
@@ -56,6 +40,12 @@ fn main() -> io::Result<()> {
             fs::read_to_string(path)?
         }
         None => {
+            if io::stdin().is_terminal() {
+                eprintln!("[ERROR] No diff file specified and stdin is a terminal.");
+                eprintln!("Usage: mend <DIFF_FILE>");
+                eprintln!("Or pipe from stdin: git diff | mend");
+                std::process::exit(1);
+            }
             if is_verbose {
                 println!("[INFO] Reading diff from stdin...");
             }
@@ -69,55 +59,28 @@ fn main() -> io::Result<()> {
         }
     };
 
-    if original_file_path.is_none() {
-        if is_verbose {
-            println!("[INFO] Original file not specified, searching in diff...");
+    let patch = match parser::parse_patch(&diff_content) {
+        Ok(patch) => patch,
+        Err(e) => {
+            eprintln!("[ERROR] Failed to parse patch: {}", e);
+            std::process::exit(1);
         }
-        match parser::find_target_file(&diff_content) {
-            Some(path) => {
-                if is_verbose {
-                    println!("[INFO] Found target file in diff: {}", path);
-                }
-                original_file_path = Some(path);
-            }
-            None => {
-                eprintln!("[ERROR] Could not determine original file from diff. Please specify it manually.");
-                std::process::exit(1);
-            }
-        }
-    }
-    let original_file_path = original_file_path.unwrap();
+    };
 
-    let original_content = fs::read_to_string(&original_file_path)?;
     if is_verbose {
-        println!("[INFO] Read original file: {}", &original_file_path);
-    }
-
-    let parsed_diff = parser::parse_diff(&diff_content);
-    if is_verbose {
-        println!("[INFO] Parsed diff with {} hunk(s).", parsed_diff.hunks.len());
+        println!("[INFO] Parsed patch with {} file diff(s).", patch.diffs.len());
         println!("[INFO] Applying patches with fuzziness level {}.", args.fuzziness);
     }
 
-    match patcher::apply_diff(&original_content, &parsed_diff, args.fuzziness, args.debug) {
-        Ok(patched_content) => {
-            if args.debug {
-                println!("[SUCCESS] All hunks applied successfully (DEBUG MODE).");
-                println!("--- START OF PATCHED FILE (not written to disk) ---");
-                println!("{}", patched_content);
-                println!("---  END OF PATCHED FILE (not written to disk)  ---");
-            } else {
-                if is_verbose {
-                    println!("[SUCCESS] All hunks applied successfully.");
-                    println!("[INFO] Writing changes to {} in-place.", original_file_path);
-                }
-                fs::write(&original_file_path, patched_content)?;
-                println!("Successfully patched {}.", original_file_path);
+    match patcher::apply_patch(&patch, args.fuzziness, args.debug) {
+        Ok(_) => {
+            if is_verbose {
+                println!("[SUCCESS] Patch applied successfully.");
             }
+            println!("Successfully applied patch.");
         }
         Err(e) => {
             eprintln!("[ERROR] Could not apply patch: {}", e);
-            eprintln!("[FAIL] The file {} was NOT modified.", &original_file_path);
             std::process::exit(1);
         }
     }

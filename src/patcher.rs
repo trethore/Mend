@@ -1,24 +1,48 @@
-use crate::diff::{Diff, Hunk, Line};
+use crate::diff::{FileDiff, Hunk, Line, Patch};
 use std::collections::HashSet;
+use std::fs;
 
 const MATCH_SCORE_THRESHOLD: f32 = 0.7;
 
-pub fn apply_diff(
-    original_content: &str,
-    diff: &Diff,
+pub fn apply_patch(
+    patch: &Patch,
     fuzziness: u8,
     debug_mode: bool,
-) -> Result<String, String> {
+) -> Result<(), String> {
+    for (i, file_diff) in patch.diffs.iter().enumerate() {
+        if debug_mode {
+            println!(
+                "[DEBUG] Applying diff {}/{} to file {}",
+                i + 1,
+                patch.diffs.len(),
+                file_diff.new_file
+            );
+        }
+        apply_file_diff(file_diff, fuzziness, debug_mode)?;
+    }
+    Ok(())
+}
+
+fn apply_file_diff(
+    file_diff: &FileDiff,
+    fuzziness: u8,
+    debug_mode: bool,
+) -> Result<(), String> {
+    let original_content = match fs::read_to_string(&file_diff.old_file) {
+        Ok(content) => content,
+        Err(e) => return Err(format!("Failed to read file {}: {}", file_diff.old_file, e)),
+    };
+
     let mut source_lines: Vec<String> = original_content.lines().map(String::from).collect();
 
-    for (i, hunk) in diff.hunks.iter().enumerate() {
+    for (i, hunk) in file_diff.hunks.iter().enumerate() {
         match find_hunk_location(&source_lines, hunk, fuzziness, debug_mode) {
             Some((start_index, matched_length)) => {
                 if debug_mode {
                     println!(
                         "[DEBUG] Hunk {}/{} matched at line {} (length {} lines)",
                         i + 1,
-                        diff.hunks.len(),
+                        file_diff.hunks.len(),
                         start_index + 1,
                         matched_length
                     );
@@ -29,13 +53,17 @@ pub fn apply_diff(
                 return Err(format!(
                     "Failed to apply hunk {}/{}. Could not find matching context.",
                     i + 1,
-                    diff.hunks.len()
+                    file_diff.hunks.len()
                 ));
             }
         }
     }
 
-    Ok(source_lines.join("\n"))
+    let new_content = source_lines.join("\n");
+    match fs::write(&file_diff.new_file, new_content) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Failed to write file {}: {}", file_diff.new_file, e)),
+    }
 }
 
 fn find_hunk_location(

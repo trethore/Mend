@@ -1,0 +1,67 @@
+--- Personne.java.old
++++ Personne.java.new
+@@ -1,7 +1,8 @@
+ import java.util.Objects;
+ public class Personne {
+-    private String nom;
++    private String firstName;
++    private String lastName;
+     private int age;
+-    public Personne(String nom, int age) {
+-        this.nom = nom;
++    public Personne(String firstName, String lastName, int age) {
++        this.firstName = firstName;
++        this.lastName = lastName;
+         this.age = age;
+     }
+-    public String getNom() {
+-        return nom;
++    public String getFirstName() {
++        return firstName;
+     }
++    public String getLastName() {
++        return lastName;
++    }
+     public int getAge() {
+         return age;
+     }
+-    public void setNom(String nom) {
+-        this.nom = nom;
++    public void setFirstName(String firstName) {
++        this.firstName = firstName;
++    }
++    public void setLastName(String lastName) {
++        this.lastName = lastName;
+     }
+     public void setAge(int age) {
+         this.age = age;
+@@ -19,7 +26,7 @@
+     public void feterAnniversaire() {
+         this.age++;
+-        System.out.println(this.nom + " a maintenant " + this.age + " ans. Joyeux anniversaire !");
++        System.out.println(this.firstName + " " + this.lastName + " a maintenant " + this.age + " ans. Joyeux anniversaire !");
+     }
+     public void saluer() {
+-        System.out.println("Bonjour, je m'appelle " + this.nom + " et j'ai " + this.age + " ans.");
++        System.out.println("Bonjour, je m'appelle " + this.firstName + " " + this.lastName + " et j'ai " + this.age + " ans.");
+     }
+     @Override
+     public String toString() {
+-        return nom + " (Age: " + age + ")";
++        return firstName + " " + lastName + " (Age: " + age + ")";
+     }
+
+     @Override
+@@ -35,7 +42,7 @@
+         if (this == o) return true;
+         if (o == null || getClass() != o.getClass()) return false;
+         Personne personne = (Personne) o;
+-        return age == personne.age && Objects.equals(nom, personne.nom);
++        return age == personne.age && Objects.equals(firstName, personne.firstName) && Objects.equals(lastName, personne.lastName);
+     }
+     @Override
+     public int hashCode() {
+-        return Objects.hash(nom, age);
++        return Objects.hash(firstName, lastName, age);
+     }
+ }
