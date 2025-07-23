@@ -35,10 +35,16 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, String> {
             continue;
         }
 
-        if current_file_diff.is_none()
-            && (line.starts_with("@@") || line.starts_with('+') || line.starts_with('-') || line.starts_with(' '))
-        {
-            current_file_diff = Some(FileDiff::default());
+        if current_file_diff.is_none() {
+            if line.starts_with("@@")
+                || line.starts_with('+')
+                || line.starts_with('-')
+                || (line.starts_with(' ') && !line.trim().is_empty())
+            {
+                current_file_diff = Some(FileDiff::default());
+            } else {
+                continue;
+            }
         }
 
         if let Some(diff) = current_file_diff.as_mut() {
@@ -47,8 +53,14 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, String> {
                 continue;
             }
 
-            if diff.hunks.is_empty() && (line.starts_with('+') || line.starts_with('-')) {
+            if diff.hunks.is_empty()
+                && (line.starts_with('+') || line.starts_with('-') || line.starts_with(' '))
+            {
                 diff.hunks.push(Hunk::default());
+            }
+
+            if diff.hunks.is_empty() {
+                continue;
             }
 
             if let Some(hunk) = diff.hunks.last_mut() {

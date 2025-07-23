@@ -32,7 +32,7 @@ Ensure you have the Rust toolchain installed.
 The script will build the project and move the binary to `/usr/local/bin`, making it available system-wide.
 
 ```bash
-git clone https://your-git-repo-url/mend.git
+git clone https://github.com/trethore/Mend.git
 cd mend
 ./install.sh
 ```

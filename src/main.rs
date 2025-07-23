@@ -3,7 +3,7 @@ use is_terminal::IsTerminal;
 use std::cmp::min;
 use std::fs;
 use std::io::{self, Error as IoError, ErrorKind, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clipboard::{ClipboardContext, ClipboardProvider};
 
@@ -46,6 +46,9 @@ struct Args {
 
     #[arg(short, long, conflicts_with = "diff_file")]
     clipboard: bool,
+
+    #[arg(long)]
+    confirm: bool,
 
     #[arg(short, long)]
     debug: bool,
@@ -113,6 +116,7 @@ fn resolve_file_diff_interactively(
     cli_target_path: &Option<String>,
     fuzziness: u8,
     debug_mode: bool,
+    confirm: bool,
     match_threshold: f32,
 ) -> Result<Option<FilePatchResult>, PatchError> {
     let old_path = cli_target_path.clone().unwrap_or_else(|| file_diff.old_file.clone());
@@ -169,8 +173,26 @@ fn resolve_file_diff_interactively(
                 } else { eprintln!("Invalid choice. Please enter a valid number, 's', or 'a'."); continue; }
             } else {
                 let chosen_match = &possible_matches[0];
-                source_lines = patcher::apply_hunk(&source_lines, hunk, chosen_match.start_index, chosen_match.matched_length);
-                break;
+                if confirm || chosen_match.score < 1.0 {
+                    eprintln!("[INFO] Found a single match for hunk {} in file {}.", i + 1, new_path);
+                    print_match_context(&source_lines, chosen_match, 1);
+                    eprintln!("\nApply this hunk? [y]es, [s]kip, [a]bort (y/s/a)");
+                    let choice = read_user_input();
+                    if choice.to_lowercase() == "y" {
+                        source_lines = patcher::apply_hunk(&source_lines, hunk, chosen_match.start_index, chosen_match.matched_length);
+                        break;
+                    } else if choice.to_lowercase() == "s" {
+                        break;
+                    } else if choice.to_lowercase() == "a" {
+                        return Err(PatchError::HunkApplicationFailed { file_path: new_path.clone(), hunk_index: i, reason: "User aborted during confirmation.".to_string() });
+                    } else {
+                        eprintln!("Invalid choice. Please enter 'y', 's', or 'a'.");
+                        continue;
+                    }
+                } else {
+                    source_lines = patcher::apply_hunk(&source_lines, hunk, chosen_match.start_index, chosen_match.matched_length);
+                    break;
+                }
             }
         }
     }
@@ -196,7 +218,6 @@ fn apply_changes(results: &[FilePatchResult]) -> io::Result<()> {
     }
     Ok(())
 }
-
 
 fn main() -> io::Result<()> {
     let mut args = Args::parse();
@@ -259,13 +280,31 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
-    let patch = match parser::parse_patch(&diff_content) {
+    let mut patch = match parser::parse_patch(&diff_content) {
         Ok(patch) => patch,
         Err(e) => {
             eprintln!("[ERROR] Failed to parse patch: {}", e);
             std::process::exit(1);
         }
     };
+
+    if let Some(target_path_str) = &args.target_file {
+        let target_path = PathBuf::from(target_path_str);
+        let target_filename = target_path.file_name().unwrap_or_default();
+
+        patch.diffs.retain(|diff| {
+            let old_filename = Path::new(&diff.old_file).file_name().unwrap_or_default();
+            let new_filename = Path::new(&diff.new_file).file_name().unwrap_or_default();
+            old_filename == target_filename || new_filename == target_filename
+        });
+
+        if patch.diffs.is_empty() {
+            eprintln!("[ERROR] No changes found in the patch for the specified target file: {}", target_path_str);
+            std::process::exit(1);
+        }
+    }
+
+
     if is_verbose {
         println!("[INFO] Parsed patch with {} file diff(s).", patch.diffs.len());
         println!("[INFO] Applying patches with fuzziness level {}.", args.fuzziness);
@@ -285,6 +324,7 @@ fn main() -> io::Result<()> {
             &args.target_file,
             args.fuzziness,
             args.debug,
+            args.confirm,
             args.match_threshold,
         ) {
             Ok(Some(result)) => {
