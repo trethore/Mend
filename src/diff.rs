@@ -7,6 +7,10 @@ pub enum Line {
 
 #[derive(Debug, Default)]
 pub struct Hunk {
+    pub _old_start: usize,
+    pub _old_lines: usize,
+    pub new_start: usize,
+    pub _new_lines: usize,
     pub lines: Vec<Line>,
 }
 

@@ -11,8 +11,8 @@ regex = "1.11.1"
 
 [[test]]
 name = "auto_detect_test"
-path = "test/auto_detect_test.rs"
+path = "tests/auto_detect_test.rs"
 
 [[test]]
 name = "patching_test"
-path = "test/patching_test.rs"
+path = "tests/patching_test.rs"

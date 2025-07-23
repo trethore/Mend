@@ -18,7 +18,30 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, String> {
             } else if line.starts_with("+++ b/") {
                 file_diff.new_file = line[6..].to_string();
             } else if line.starts_with("@@") {
-                file_diff.hunks.push(Hunk::default());
+                if let Some(hunk_header) = line.strip_prefix("@@ ").and_then(|s| s.strip_suffix(" @@")) {
+                    let parts: Vec<&str> = hunk_header.split(' ').collect();
+                    if parts.len() == 2 {
+                        let old_range: Vec<&str> = parts[0].strip_prefix("-").unwrap_or("").split(',').collect();
+                        let new_range: Vec<&str> = parts[1].strip_prefix("+").unwrap_or("").split(',').collect();
+
+                        let old_start = old_range[0].parse::<usize>().unwrap_or(0);
+                        let old_lines = old_range.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
+                        let new_start = new_range[0].parse::<usize>().unwrap_or(0);
+                        let new_lines = new_range.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
+
+                        file_diff.hunks.push(Hunk {
+                            _old_start: old_start,
+                            _old_lines: old_lines,
+                            new_start,
+                            _new_lines: new_lines,
+                            ..Default::default()
+                        });
+                    } else {
+                        file_diff.hunks.push(Hunk::default());
+                    }
+                } else {
+                    file_diff.hunks.push(Hunk::default());
+                }
             } else if let Some(current_hunk) = file_diff.hunks.last_mut() {
                 if let Some(text) = line.strip_prefix('+') {
                     current_hunk.lines.push(Line::Addition(text.to_string()));
