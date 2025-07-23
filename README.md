@@ -27,27 +27,26 @@ Where standard `patch` tools fail due to incorrect line numbers or slightly-off 
 
 Ensure you have the Rust toolchain installed.
 
-#### Using the install script (Recommended):
+#### Using Cargo (Recommended)
 
-The script will build the project and move the binary to `/usr/local/bin`, making it available system-wide.
+This is the standard and recommended way to install Rust binaries. It compiles `mend` and places the binary in your Cargo home directory (`~/.cargo/bin`), which should be in your system's `PATH`.
 
 ```bash
 git clone https://github.com/trethore/Mend.git
 cd mend
-./install.sh
-```
-
-#### Using Cargo:
-
-You can also install the binary directly into your cargo home directory.
-
-```bash
-git clone https://your-git-repo-url/mend.git
-cd mend
 cargo install --path .
 ```
+Now you can run `mend` from anywhere in your terminal.
 
-This will compile `mend` and make it available in your shell.
+#### Using the install script (for system-wide installation)
+
+If you prefer to install the binary to `/usr/local/bin` to make it available to all users on your system, you can use the provided helper script.
+
+```bash
+git clone https://github.com/your-username/mend.git
+cd mend
+./install.sh
+```
 
 ## Usage
 
@@ -60,7 +59,7 @@ This will compile `mend` and make it available in your shell.
 mend my_changes.diff
 ```
 
-You can also specify the original file explicitly, which is useful if the diff has no headers.
+You can also specify the original file explicitly, which is useful if the diff has no headers or the patch contains changes for multiple files.
 ```bash
 mend path/to/original_file path/to/diff_file
 ```
@@ -95,6 +94,14 @@ To see which files will be modified, created, or deleted without writing any cha
 
 ```bash
 mend --dry-run my_changes.diff
+```
+
+### Confirming Every Change
+
+To review and confirm every hunk before it is applied, even if it's a perfect match, use the `--confirm` flag.
+
+```bash
+mend --confirm my_changes.diff
 ```
 
 ### Show an Example
@@ -144,12 +151,13 @@ Do you want to [s]kip this hunk or [a]bort the process? (s/a)
 
 #### **Arguments:**
 
--   `[TARGET_FILE]`: (Optional) The path to the file to be patched. If omitted, `mend` will try to determine the file from the diff headers.
+-   `[TARGET_FILE]`: (Optional) The path to the file to be patched. If provided, `mend` will only apply hunks from the diff that match this file. If omitted, it will process all files from the diff headers.
 -   `[DIFF_FILE]`: (Optional) The path to the diff/patch file. If omitted, `mend` reads from standard input.
 
 #### **Options:**
 
 -   `-c, --clipboard`: Read the diff content from the system clipboard.
+-   `--confirm`: Require interactive confirmation for every hunk, even perfect matches.
 -   `--dry-run`: Preview all changes without writing to disk.
 -   `--debug`: Enable highly detailed logs for debugging `mend` itself. Implies `--dry-run`.
 -   `--example`: Print an example diff to the console and exit.
@@ -162,4 +170,19 @@ Do you want to [s]kip this hunk or [a]bort the process? (s/a)
 
 ## How It Works
 
-`mend` operates on a simple but powerful principle: **trust the content, not the coordinates.** It parses the context lines (` `) and removal lines (`-`) from a diff hunk and searches for that block of text in the original file, making it resilient to the incorrect line numbers that LLMs often produce.
+`mend` operates on a simple but powerful principle: **trust the content, not the coordinates.** It parses the context lines (` `) and removal lines (`-`) from a diff hunk and searches for that block of text in the original file.
+
+This search happens in stages to maximize accuracy and speed:
+1.  **Strict Search:** First, it looks for a perfect, character-for-character match.
+2.  **Whitespace-Insensitive Search:** If that fails, it normalizes whitespace and ignores blank lines to find a match.
+3.  **Anchor-Point Heuristic:** As a final attempt, it uses the first and last lines of the hunk as "anchors" and searches for a region in the file that contains both, scoring the content in between for similarity. This makes it resilient to incorrect line numbers and modified context that LLMs often produce.
+
+## Development
+
+Contributions are welcome!
+
+To run the test suite, simply use `cargo`. The tests are self-contained and will create their own working directories and fixtures.
+
+```bash
+cargo test
+```
