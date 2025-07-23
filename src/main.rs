@@ -47,6 +47,9 @@ struct Args {
     #[arg(short, long, conflicts_with = "diff_file")]
     clipboard: bool,
 
+    #[arg(long, default_value_t = false)]
+    ci: bool,
+
     #[arg(long)]
     confirm: bool,
 
@@ -117,6 +120,7 @@ fn resolve_file_diff_interactively(
     fuzziness: u8,
     debug_mode: bool,
     confirm: bool,
+    ci: bool,
     match_threshold: f32,
 ) -> Result<Option<FilePatchResult>, PatchError> {
     let old_path = cli_target_path.clone().unwrap_or_else(|| file_diff.old_file.clone());
@@ -147,6 +151,9 @@ fn resolve_file_diff_interactively(
         loop {
             let possible_matches = patcher::find_hunk_location(&source_lines, hunk, fuzziness, debug_mode, match_threshold);
             if possible_matches.is_empty() {
+                if ci {
+                    return Err(PatchError::HunkApplicationFailed { file_path: new_path.clone(), hunk_index: i, reason: "No matching context found in CI mode.".to_string() });
+                }
                 eprintln!("[ERROR] Failed to apply hunk {} for file {}. No matching context found.", i + 1, new_path);
                 eprintln!("Do you want to [s]kip this hunk or [a]bort the process? (s/a)");
                 let choice = read_user_input();
@@ -155,6 +162,9 @@ fn resolve_file_diff_interactively(
                     return Err(PatchError::HunkApplicationFailed { file_path: new_path.clone(), hunk_index: i, reason: "User aborted due to unresolvable hunk.".to_string() });
                 } else { eprintln!("Invalid choice. Please enter 's' to skip or 'a' to abort."); continue; }
             } else if possible_matches.len() > 1 {
+                if ci {
+                    return Err(PatchError::AmbiguousMatch { file_path: new_path.clone(), hunk_index: i });
+                }
                 eprintln!("[ERROR] Ambiguous match for hunk {} in file {}. Possible locations:", i + 1, new_path);
                 for (idx, m) in possible_matches.iter().enumerate() {
                     print_match_context(&source_lines, m, idx + 1);
@@ -173,7 +183,7 @@ fn resolve_file_diff_interactively(
                 } else { eprintln!("Invalid choice. Please enter a valid number, 's', or 'a'."); continue; }
             } else {
                 let chosen_match = &possible_matches[0];
-                if confirm || chosen_match.score < 1.0 {
+                if !ci && (confirm || chosen_match.score < 1.0) {
                     eprintln!("[INFO] Found a single match for hunk {} in file {}.", i + 1, new_path);
                     print_match_context(&source_lines, chosen_match, 1);
                     eprintln!("\nApply this hunk? [y]es, [s]kip, [a]bort (y/s/a)");
@@ -304,7 +314,6 @@ fn main() -> io::Result<()> {
         }
     }
 
-
     if is_verbose {
         println!("[INFO] Parsed patch with {} file diff(s).", patch.diffs.len());
         println!("[INFO] Applying patches with fuzziness level {}.", args.fuzziness);
@@ -325,6 +334,7 @@ fn main() -> io::Result<()> {
             args.fuzziness,
             args.debug,
             args.confirm,
+            args.ci,
             args.match_threshold,
         ) {
             Ok(Some(result)) => {

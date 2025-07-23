@@ -59,7 +59,6 @@ impl std::fmt::Display for PatchError {
     }
 }
 
-
 fn deduplicate_matches(matches: Vec<HunkMatch>) -> Vec<HunkMatch> {
     if matches.len() <= 1 {
         return matches;
@@ -89,7 +88,6 @@ fn deduplicate_matches(matches: Vec<HunkMatch>) -> Vec<HunkMatch> {
 
     final_matches
 }
-
 
 pub fn find_hunk_location(
     source_lines: &[String],
@@ -147,32 +145,37 @@ pub fn find_hunk_location(
         return matches;
     }
 
+    let clean_source_map: Vec<(usize, String)> = source_lines
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i, normalize_line(s)))
+        .filter(|(_, s)| !s.is_empty())
+        .collect();
+
     if fuzziness >= 1 {
         if debug_mode {
             println!("[DEBUG]   -> Trying whitespace-insensitive match...");
         }
-        for i in 0..=source_lines.len() {
-            let mut consumed_lines = 0;
-            let mut clean_source_window = Vec::new();
-            for (line_offset, line) in source_lines.iter().skip(i).enumerate() {
-                consumed_lines = line_offset + 1;
-                let normalized = normalize_line(line);
-                if !normalized.is_empty() {
-                    clean_source_window.push(normalized);
-                }
-                if clean_source_window.len() >= clean_anchor.len() {
-                    break;
-                }
-            }
 
-            if clean_source_window == clean_anchor {
+        let clean_source_lines: Vec<&String> = clean_source_map.iter().map(|(_, s)| s).collect();
+
+        for (clean_start_idx, window) in clean_source_lines.windows(clean_anchor.len()).enumerate() {
+            if window.iter().zip(clean_anchor.iter()).all(|(&s1, s2)| s1 == s2) {
+                let original_start_index = clean_source_map[clean_start_idx].0;
+
+                let clean_end_idx = clean_start_idx + clean_anchor.len() - 1;
+                let original_end_index = clean_source_map[clean_end_idx].0;
+
+                let consumed_lines = original_end_index - original_start_index + 1;
+
                 matches.push(HunkMatch {
-                    start_index: i,
+                    start_index: original_start_index,
                     matched_length: consumed_lines,
                     score: 0.9,
                 });
             }
         }
+
         if !matches.is_empty() {
              return deduplicate_matches(matches);
         }
@@ -183,35 +186,29 @@ pub fn find_hunk_location(
             println!("[DEBUG]   -> Trying anchor-point heuristic match...");
         }
 
-        let top_anchor = clean_anchor.first();
-        let bottom_anchor = clean_anchor.last();
+        let top_anchor = clean_anchor.first().unwrap();
+        let bottom_anchor = clean_anchor.last().unwrap();
 
-        if top_anchor.is_none() || bottom_anchor.is_none() {
-            return matches;
-        }
-        let top_anchor = top_anchor.unwrap();
-        let bottom_anchor = bottom_anchor.unwrap();
+        for (clean_idx, (original_idx_top, normalized_line_top)) in clean_source_map.iter().enumerate() {
+            if normalized_line_top == top_anchor {
+                let search_window_end = (*original_idx_top + anchor_lines.len() + 50).min(source_lines.len());
 
-        for (i, source_line) in source_lines.iter().enumerate() {
-            if normalize_line(source_line) == *top_anchor {
-                let search_window_end = (i + anchor_lines.len() + 50).min(source_lines.len());
-
-                for (j, inner_source_line) in source_lines.iter().enumerate().skip(i + 1) {
-                    if j >= search_window_end {
+                for (_, (original_idx_bottom, normalized_line_bottom)) in clean_source_map.iter().enumerate().skip(clean_idx + 1) {
+                    if *original_idx_bottom >= search_window_end {
                         break;
                     }
 
-                    if normalize_line(inner_source_line) == *bottom_anchor {
-                        let start_index = i;
-                        let length = j - i + 1;
-                        let candidate_block = &source_lines[start_index..=j];
+                    if normalized_line_bottom == bottom_anchor {
+                        let start_index = *original_idx_top;
+                        let length = *original_idx_bottom - start_index + 1;
+                        let candidate_block = &source_lines[start_index..=*original_idx_bottom];
 
                         let score = calculate_match_score(&clean_anchor, candidate_block);
                         if debug_mode {
                             println!(
                                 "[DEBUG]     - Candidate at lines {}-{} scored {:.2}",
-                                i + 1,
-                                j + 1,
+                                start_index + 1,
+                                *original_idx_bottom + 1,
                                 score
                             );
                         }
@@ -231,6 +228,7 @@ pub fn find_hunk_location(
 
     deduplicate_matches(matches)
 }
+
 
 fn calculate_match_score(clean_anchor: &[String], candidate_block: &[String]) -> f32 {
     let normalized_candidate_set: HashSet<String> = candidate_block
