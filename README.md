@@ -9,9 +9,7 @@ Where standard `patch` tools fail due to incorrect line numbers or slightly-off 
 ## Features
 
 -   **Interactive Conflict Resolution:** Never get stuck on a failed patch again. If `mend` can't find a perfect spot or finds multiple possibilities, it prompts you to choose the correct location, skip the problematic hunk, or abort safely.
-<!-- ADDITION START -->
 -   **CI/Scripting Friendly:** Use the `--ci` flag to run `mend` in non-interactive mode. It will fail with a non-zero exit code on any ambiguity or error, making it perfect for automated workflows.
-<!-- ADDITION END -->
 -   **Clipboard & Stdin Support:** Paste a diff directly from your clipboard with `-c` or pipe it in from other tools like `git diff` or `cat`.
 
 -   **Powerful Fuzzy Matching Engine:** A multi-stage algorithm that finds the correct patch location even with formatting changes, modified context lines, or other LLM-induced noise.
@@ -45,7 +43,7 @@ Now you can run `mend` from anywhere in your terminal.
 If you prefer to install the binary to `/usr/local/bin` to make it available to all users on your system, you can use the provided helper script.
 
 ```bash
-git clone https://github.com/your-username/mend.git
+git clone https://github.com/trethore/Mend.git
 cd mend
 ./install.sh
 ```
