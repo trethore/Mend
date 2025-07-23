@@ -10,6 +10,8 @@ Where standard `patch` tools fail due to incorrect line numbers or slightly-off 
 
 -   **Interactive Conflict Resolution:** Never get stuck on a failed patch again. If `mend` can't find a perfect spot or finds multiple possibilities, it prompts you to choose the correct location, skip the problematic hunk, or abort safely.
 
+-   **Clipboard & Stdin Support:** Paste a diff directly from your clipboard with `-c` or pipe it in from other tools like `git diff` or `cat`.
+
 -   **Powerful Fuzzy Matching Engine:** A multi-stage algorithm that finds the correct patch location even with formatting changes, modified context lines, or other LLM-induced noise.
     -   **Level 0 (Strict):** An exact, line-by-line match.
     -   **Level 1 (Whitespace Insensitive):** Ignores leading/trailing whitespace and empty lines.
@@ -23,7 +25,21 @@ Where standard `patch` tools fail due to incorrect line numbers or slightly-off 
 
 ## Installation
 
-Ensure you have the Rust toolchain installed. You can then install `mend` directly from the source code:
+Ensure you have the Rust toolchain installed.
+
+#### Using the install script (Recommended):
+
+The script will build the project and move the binary to `/usr/local/bin`, making it available system-wide.
+
+```bash
+git clone https://your-git-repo-url/mend.git
+cd mend
+./install.sh
+```
+
+#### Using Cargo:
+
+You can also install the binary directly into your cargo home directory.
 
 ```bash
 git clone https://your-git-repo-url/mend.git
@@ -35,30 +51,42 @@ This will compile `mend` and make it available in your shell.
 
 ## Usage
 
-### Applying a Patch
+### Applying a Patch from a File
 
-`mend` can auto-detect the target file from the diff header.
+`mend` auto-detects the target file from the diff header. If a single file path is given, it's assumed to be the diff file.
 
 ```bash
 # Auto-detects the file from the diff and modifies it in-place
 mend my_changes.diff
 ```
 
-You can also specify the original file explicitly, though this is rarely needed:
+You can also specify the original file explicitly, which is useful if the diff has no headers.
 ```bash
 mend path/to/original_file path/to/diff_file
 ```
 
 ### Piping from Stdin
 
-`mend` can also read the diff from standard input, making it perfect for piping from other tools.
+`mend` can read the diff from standard input, making it perfect for piping.
 
 ```bash
-# Pipe a diff directly to mend
+# Pipe a diff directly to mend (auto-detects target file from headers)
 cat my_changes.diff | mend
 
-# Generate a diff and apply it in one go
-git diff | mend
+# Pipe from git diff and specify the target file (if headers are missing/ambiguous)
+git diff | mend path/to/original_file
+```
+
+### Applying from Clipboard
+
+Copy a diff to your clipboard and apply it with the `-c` or `--clipboard` flag.
+
+```bash
+# Apply a diff from the clipboard, auto-detecting the target file
+mend -c
+
+# Apply a diff from the clipboard to a specific file
+mend -c path/to/original_file
 ```
 
 ### Previewing Changes (Dry Run)
@@ -69,15 +97,38 @@ To see which files will be modified, created, or deleted without writing any cha
 mend --dry-run my_changes.diff
 ```
 
-### Interactive Mode in Action
+### Show an Example
+
+To see a sample diff file that `mend` understands, use the `--example` flag.
+
+```bash
+mend --example
+```
+
+## Interactive Mode in Action
 
 If a patch hunk is ambiguous or cannot be applied, `mend` will prompt you for input.
 
 **Ambiguous Match:**
 ```
 [ERROR] Ambiguous match for hunk 1 in file src/main.rs. Possible locations:
-  1. Line 42 (Score: 0.95)
-  2. Line 118 (Score: 0.85)
+
+> Option 1 (Line 42, Score: 0.95)
+    40 | }
+    41 |
+    | 42  | fn main() { |
+    | --- | ----------- |(Patch would be applied here, replacing 5 lines) ---
+    47 |     println!("Exiting...");
+    48 | }
+
+> Option 2 (Line 118, Score: 0.85)
+   116 | }
+   117 |
+   | 118 | fn old_main() { |
+   | --- | --------------- |(Patch would be applied here, replacing 5 lines) ---
+   123 |     println!("Old exit...");
+   124 | }
+
 Enter the index of the correct location, [s]kip this hunk, or [a]bort:
 ```
 
@@ -89,20 +140,25 @@ Do you want to [s]kip this hunk or [a]bort the process? (s/a)
 
 ## Command-Line Reference
 
+#### **Usage:** `mend [OPTIONS] [TARGET_FILE] [DIFF_FILE]`
+
 #### **Arguments:**
 
--   `mend [DIFF_FILE]`: The path to the diff/patch file. If omitted, `mend` reads from standard input.
+-   `[TARGET_FILE]`: (Optional) The path to the file to be patched. If omitted, `mend` will try to determine the file from the diff headers.
+-   `[DIFF_FILE]`: (Optional) The path to the diff/patch file. If omitted, `mend` reads from standard input.
 
-#### **Flags:**
+#### **Options:**
 
+-   `-c, --clipboard`: Read the diff content from the system clipboard.
 -   `--dry-run`: Preview all changes without writing to disk.
 -   `--debug`: Enable highly detailed logs for debugging `mend` itself. Implies `--dry-run`.
+-   `--example`: Print an example diff to the console and exit.
 -   `-v, --verbose`: Enable verbose logging to see which files and hunks are being processed.
 -   `-f, --fuzziness <LEVEL>`: Manually set the matching strategy. Default: `2`.
-    -   `0`: Strict mode only.
+    -   `0`: Strict mode only (exact match).
     -   `1`: Allows whitespace and empty line differences.
     -   `2`: Enables all strategies, including the anchor-point heuristic.
--   `--match-threshold <SCORE>`: Sets the minimum score (from `0.0` to `1.0`) required for a match when using the Level 2 heuristic. Default: `0.7`.
+-   `-m, --match-threshold <SCORE>`: Sets the minimum score (from `0.0` to `1.0`) required for a match when using the Level 2 heuristic. Default: `0.7`.
 
 ## How It Works
 
