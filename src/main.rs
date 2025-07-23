@@ -87,7 +87,7 @@ fn resolve_file_diff_interactively(
                 eprintln!("Do you want to [s]kip this hunk or [a]bort the process? (s/a)");
                 let choice = read_user_input();
                 if choice.to_lowercase() == "s" {
-                    break; // Skip this hunk and move to the next
+                    break;
                 } else if choice.to_lowercase() == "a" {
                     return Err(PatchError::HunkApplicationFailed {
                         file_path: file_diff.new_file.clone(),
@@ -96,7 +96,7 @@ fn resolve_file_diff_interactively(
                     });
                 } else {
                     eprintln!("Invalid choice. Please enter 's' to skip or 'a' to abort.");
-                    continue; // Ask again
+                    continue;
                 }
             } else if possible_matches.len() > 1 {
                 eprintln!("[ERROR] Ambiguous match for hunk {} in file {}. Possible locations:", i + 1, file_diff.new_file);
@@ -106,7 +106,7 @@ fn resolve_file_diff_interactively(
                 eprintln!("Enter the index of the correct location, [s]kip this hunk, or [a]bort: ");
                 let choice = read_user_input();
                 if choice.to_lowercase() == "s" {
-                    break; // Skip this hunk and move to the next
+                    break;
                 } else if choice.to_lowercase() == "a" {
                     return Err(PatchError::AmbiguousMatch {
                         file_path: file_diff.new_file.clone(),
@@ -130,17 +130,16 @@ fn resolve_file_diff_interactively(
                             chosen_match.start_index,
                             chosen_match.matched_length,
                         );
-                        break; // Hunk applied, move to next hunk
+                        break;
                     } else {
                         eprintln!("Invalid index. Please enter a valid number, 's', or 'a'.");
-                        continue; // Ask again
+                        continue;
                     }
                 } else {
                     eprintln!("Invalid choice. Please enter a valid number, 's', or 'a'.");
-                    continue; // Ask again
+                    continue;
                 }
             } else {
-                // Exactly one match found, apply it
                 let chosen_match = &possible_matches[0];
                 if debug_mode {
                     println!(
@@ -157,7 +156,7 @@ fn resolve_file_diff_interactively(
                     chosen_match.start_index,
                     chosen_match.matched_length,
                 );
-                break; // Hunk applied, move to next hunk
+                break;
             }
         }
     }
@@ -243,7 +242,7 @@ fn main() -> io::Result<()> {
                 all_patch_results.push(result);
             }
             Ok(None) => {
-                // Hunk was skipped, do nothing for this file
+                // do nothing.
             }
             Err(e) => {
                 eprintln!("[ERROR] Could not apply patch: {}", e);
