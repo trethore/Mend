@@ -11,6 +11,8 @@ mod patcher;
 use diff::FileDiff;
 use patcher::{FilePatchResult, PatchError};
 
+const EXAMPLE_DIFF: &str = include_str!("../resources/example.diff");
+
 #[derive(Parser, Debug)]
 #[command(
     author = "Tytoo",
@@ -36,11 +38,14 @@ struct Args {
 
     diff_file: Option<String>,
 
-    #[arg(long)]
+    #[arg(short, long)]
     debug: bool,
 
     #[arg(long, default_value_t = false)]
     dry_run: bool,
+
+    #[arg(short, long)]
+    example: bool,
 
     #[arg(short, long, default_value_t = 2)]
     fuzziness: u8,
@@ -94,8 +99,6 @@ fn print_match_context(
         }
     }
 }
-
-
 fn resolve_file_diff_interactively(
     file_diff: &FileDiff,
     cli_target_path: &Option<String>,
@@ -105,15 +108,12 @@ fn resolve_file_diff_interactively(
 ) -> Result<Option<FilePatchResult>, PatchError> {
     let old_path = cli_target_path.clone().unwrap_or_else(|| file_diff.old_file.clone());
     let new_path = cli_target_path.clone().unwrap_or_else(|| file_diff.new_file.clone());
-
     if old_path.is_empty() && new_path != "/dev/null" {
         return Err(PatchError::IOError("Could not determine target file. The diff has no file headers. Please specify the target file: `mend <TARGET_FILE> [DIFF_FILE]`".to_string()));
     }
-
     if new_path == "/dev/null" {
         return Ok(Some(FilePatchResult::Deleted { path: old_path }));
     }
-
     let mut source_lines: Vec<String> = if old_path == "/dev/null" {
         Vec::new()
     } else {
@@ -130,31 +130,17 @@ fn resolve_file_diff_interactively(
             .map(String::from)
             .collect()
     };
-
     for (i, hunk) in file_diff.hunks.iter().enumerate().rev() {
         loop {
-            let possible_matches = patcher::find_hunk_location(
-                &source_lines,
-                hunk,
-                fuzziness,
-                debug_mode,
-                match_threshold,
-            );
+            let possible_matches = patcher::find_hunk_location(&source_lines, hunk, fuzziness, debug_mode, match_threshold);
             if possible_matches.is_empty() {
                 eprintln!("[ERROR] Failed to apply hunk {} for file {}. No matching context found.", i + 1, new_path);
                 eprintln!("Do you want to [s]kip this hunk or [a]bort the process? (s/a)");
                 let choice = read_user_input();
                 if choice.to_lowercase() == "s" { break; }
                 else if choice.to_lowercase() == "a" {
-                    return Err(PatchError::HunkApplicationFailed {
-                        file_path: new_path.clone(),
-                        hunk_index: i,
-                        reason: "User aborted due to unresolvable hunk.".to_string(),
-                    });
-                } else {
-                    eprintln!("Invalid choice. Please enter 's' to skip or 'a' to abort.");
-                    continue;
-                }
+                    return Err(PatchError::HunkApplicationFailed { file_path: new_path.clone(), hunk_index: i, reason: "User aborted due to unresolvable hunk.".to_string() });
+                } else { eprintln!("Invalid choice. Please enter 's' to skip or 'a' to abort."); continue; }
             } else if possible_matches.len() > 1 {
                 eprintln!("[ERROR] Ambiguous match for hunk {} in file {}. Possible locations:", i + 1, new_path);
                 for (idx, m) in possible_matches.iter().enumerate() {
@@ -179,33 +165,24 @@ fn resolve_file_diff_interactively(
             }
         }
     }
-
     let new_content = source_lines.join("\n");
-
     if old_path == "/dev/null" {
         Ok(Some(FilePatchResult::Created { path: new_path, new_content }))
     } else {
         Ok(Some(FilePatchResult::Modified { path: new_path, new_content }))
     }
 }
-
 fn apply_changes(results: &[FilePatchResult]) -> io::Result<()> {
     for result in results {
         match result {
-            FilePatchResult::Modified { path, new_content } => {
-                fs::write(path, new_content)?;
-            }
+            FilePatchResult::Modified { path, new_content } => { fs::write(path, new_content)?; }
             FilePatchResult::Created { path, new_content } => {
                 if let Some(parent) = Path::new(path).parent() {
-                    if !parent.exists() {
-                        fs::create_dir_all(parent)?;
-                    }
+                    if !parent.exists() { fs::create_dir_all(parent)?; }
                 }
                 fs::write(path, new_content)?;
             }
-            FilePatchResult::Deleted { path } => {
-                fs::remove_file(path)?;
-            }
+            FilePatchResult::Deleted { path } => { fs::remove_file(path)?; }
         }
     }
     Ok(())
@@ -214,6 +191,13 @@ fn apply_changes(results: &[FilePatchResult]) -> io::Result<()> {
 
 fn main() -> io::Result<()> {
     let mut args = Args::parse();
+
+    if args.example {
+        println!("This is an example diff, please follow the same format.\n");
+        println!("{}", EXAMPLE_DIFF);
+        return Ok(());
+    }
+
     let is_verbose = args.verbose || args.debug;
 
     if args.target_file.is_some() && args.diff_file.is_none() {

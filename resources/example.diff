@@ -1,0 +1,61 @@
+--- a/OldPersonne.java
++++ b/NewPersonne.java
+@@ -3,10 +3,12 @@ import java.util.Objects;
+ public class Personne {
+     private String nom;
+     private int age;
++    private String prenom;
+
+-    public Personne(String nom, int age) {
++    public Personne(String nom, String prenom, int age) {
+         this.nom = nom;
+         this.age = age;
++        this.prenom = prenom;
+     }
+
+     public String getNom() {
+@@ -25,18 +27,28 @@ public class Personne {
+         this.age = age;
+     }
+
++    public String getPrenom() {
++        return prenom;
++    }
++
++    public void setPrenom(String prenom) {
++        this.prenom = prenom;
++    }
++
+     public void feterAnniversaire() {
+         this.age++;
+-        System.out.println(this.nom + " a maintenant " + this.age + " ans. Joyeux anniversaire !");
++        System.out.println(this.prenom + " " + this.nom + " a maintenant " + this.age + " ans. Joyeux anniversaire !");
+     }
+
+     public void saluer() {
+-        System.out.println("Bonjour, je m'appelle " + this.nom + " et j'ai " + this.age + " ans.");
++        System.out.println("Bonjour, je m'appelle " + this.prenom + " " + this.nom + " et j'ai " + this.age + " ans.");
+     }
+
+     @Override
+     public String toString() {
+-        return nom + " (Age: " + age + ")";
++        return prenom + " " + nom + " (Age: " + age + ")";
+     }
+
+     @Override
+@@ -44,11 +56,11 @@ public class Personne {
+         if (this == o) return true;
+         if (o == null || getClass() != o.getClass()) return false;
+         Personne personne = (Personne) o;
+-        return age == personne.age && Objects.equals(nom, personne.nom);
++        return age == personne.age && Objects.equals(nom, personne.nom) && Objects.equals(prenom, personne.prenom);
+     }
+
+     @Override
+     public int hashCode() {
+-        return Objects.hash(nom, age);
++        return Objects.hash(nom, prenom, age);
+     }
+-}
++}
