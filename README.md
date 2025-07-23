@@ -9,7 +9,9 @@ Where standard `patch` tools fail due to incorrect line numbers or slightly-off 
 ## Features
 
 -   **Interactive Conflict Resolution:** Never get stuck on a failed patch again. If `mend` can't find a perfect spot or finds multiple possibilities, it prompts you to choose the correct location, skip the problematic hunk, or abort safely.
-
+<!-- ADDITION START -->
+-   **CI/Scripting Friendly:** Use the `--ci` flag to run `mend` in non-interactive mode. It will fail with a non-zero exit code on any ambiguity or error, making it perfect for automated workflows.
+<!-- ADDITION END -->
 -   **Clipboard & Stdin Support:** Paste a diff directly from your clipboard with `-c` or pipe it in from other tools like `git diff` or `cat`.
 
 -   **Powerful Fuzzy Matching Engine:** A multi-stage algorithm that finds the correct patch location even with formatting changes, modified context lines, or other LLM-induced noise.
@@ -103,7 +105,16 @@ To review and confirm every hunk before it is applied, even if it's a perfect ma
 ```bash
 mend --confirm my_changes.diff
 ```
+<!-- ADDITION START -->
+### Use in Scripts and CI
 
+For automated environments, prevent `mend` from prompting for input by using the `--ci` flag. If any hunk cannot be applied cleanly (due to an error or ambiguity), `mend` will exit with an error instead of asking for help.
+
+```bash
+# This will succeed or fail silently without user interaction
+cat my_changes.diff | mend --ci
+```
+<!-- ADDITION END -->
 ### Show an Example
 
 To see a sample diff file that `mend` understands, use the `--example` flag.
@@ -157,6 +168,9 @@ Do you want to [s]kip this hunk or [a]bort the process? (s/a)
 #### **Options:**
 
 -   `-c, --clipboard`: Read the diff content from the system clipboard.
+<!-- ADDITION START -->
+-   `--ci`: Run in non-interactive "CI" mode. Fails with an error instead of prompting for user input on any ambiguity or failed match.
+<!-- ADDITION END -->
 -   `--confirm`: Require interactive confirmation for every hunk, even perfect matches.
 -   `--dry-run`: Preview all changes without writing to disk.
 -   `--debug`: Enable highly detailed logs for debugging `mend` itself. Implies `--dry-run`.
