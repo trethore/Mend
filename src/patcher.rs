@@ -59,6 +59,34 @@ impl std::fmt::Display for PatchError {
     }
 }
 
+fn apply_proximity_bonus(matches: &mut Vec<HunkMatch>, old_start_line: usize, debug_mode: bool) {
+    const MAX_DISTANCE_FOR_BONUS: usize = 50;
+    const MAX_BONUS: f32 = 0.05;
+
+    if old_start_line == 0 {
+        return;
+    }
+    if debug_mode {
+        println!(
+            "[DEBUG]   -> Applying proximity bonus based on original start line: {}",
+            old_start_line
+        );
+    }
+
+    for m in matches.iter_mut() {
+        let distance =
+            (m.start_index as i64 - (old_start_line.saturating_sub(1)) as i64).abs() as usize;
+        if distance <= MAX_DISTANCE_FOR_BONUS {
+            let bonus = MAX_BONUS * (1.0 - distance as f32 / MAX_DISTANCE_FOR_BONUS as f32);
+            let old_score = m.score;
+            m.score = (m.score + bonus).min(1.0);
+            if debug_mode && m.score > old_score {
+                println!("[DEBUG]     - Bonus for match at line {}: score {:.2} -> {:.2} (distance: {})", m.start_index + 1, old_score, m.score, distance);
+            }
+        }
+    }
+}
+
 fn deduplicate_matches(matches: Vec<HunkMatch>) -> Vec<HunkMatch> {
     if matches.len() <= 1 {
         return matches;
@@ -109,7 +137,7 @@ pub fn find_hunk_location(
 
     if anchor_lines.is_empty() {
         matches.push(HunkMatch {
-            start_index: hunk.new_start.saturating_sub(1),
+            start_index: hunk.old_start,
             matched_length: 0,
             score: 1.0,
         });
@@ -177,7 +205,8 @@ pub fn find_hunk_location(
         }
 
         if !matches.is_empty() {
-             return deduplicate_matches(matches);
+            apply_proximity_bonus(&mut matches, hunk.old_start, debug_mode);
+            return deduplicate_matches(matches);
         }
     }
 
@@ -226,9 +255,9 @@ pub fn find_hunk_location(
         }
     }
 
+    apply_proximity_bonus(&mut matches, hunk.old_start, debug_mode);
     deduplicate_matches(matches)
 }
-
 
 fn calculate_match_score(clean_anchor: &[String], candidate_block: &[String]) -> f32 {
     let normalized_candidate_set: HashSet<String> = candidate_block
