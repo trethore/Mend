@@ -239,7 +239,7 @@ pub fn find_hunk_location(
         let change_magnitude = num_additions + num_removals;
 
         let adaptive_window = anchor_lines.len() + std::cmp::max(10, 4 * change_magnitude);
-        let search_window_size = std::cmp::min(adaptive_window, 400); // Hard cap for performance
+        let search_window_size = std::cmp::min(adaptive_window, 400);
 
         if debug_mode {
             println!("[DEBUG]     - Adaptive search window size: {}", search_window_size);
