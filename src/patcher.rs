@@ -1,5 +1,7 @@
 use crate::diff::{Hunk, Line};
-use std::collections::{HashMap, HashSet};
+use lcs::LcsTable;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub enum FilePatchResult {
@@ -21,6 +23,7 @@ pub struct HunkMatch {
     pub start_index: usize,
     pub matched_length: usize,
     pub score: f32,
+    pub density: f32,
 }
 
 #[derive(Debug)]
@@ -59,6 +62,10 @@ impl std::fmt::Display for PatchError {
     }
 }
 
+fn get_indentation(s: &str) -> &str {
+    s.find(|c: char| !c.is_whitespace()).map_or(s, |i| &s[..i])
+}
+
 fn apply_proximity_bonus(matches: &mut Vec<HunkMatch>, old_start_line: usize, debug_mode: bool) {
     const MAX_DISTANCE_FOR_BONUS: usize = 50;
     const MAX_BONUS: f32 = 0.05;
@@ -91,30 +98,34 @@ fn deduplicate_matches(matches: Vec<HunkMatch>) -> Vec<HunkMatch> {
     if matches.len() <= 1 {
         return matches;
     }
-
     let mut best_matches: HashMap<usize, HunkMatch> = HashMap::new();
-
     for m in matches {
         let entry = best_matches.entry(m.start_index).or_insert_with(|| m.clone());
 
         if m.score > entry.score {
             *entry = m;
-        }
-        else if m.score == entry.score && m.matched_length > entry.matched_length {
+        } else if m.score == entry.score && m.density > entry.density {
             *entry = m;
         }
     }
 
-    let best_score = best_matches.values().map(|m| m.score).fold(0.0, f32::max);
+    let mut unique_matches: Vec<HunkMatch> = best_matches.into_values().collect();
 
-    let mut final_matches: Vec<HunkMatch> = best_matches
-        .into_values()
-        .filter(|m| m.score >= best_score * 0.9)
-        .collect();
+    unique_matches.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| b.density.partial_cmp(&a.density).unwrap_or(Ordering::Equal))
+            .then_with(|| a.start_index.cmp(&b.start_index))
+    });
 
-    final_matches.sort_by_key(|m| m.start_index);
+    if unique_matches.is_empty() {
+        return unique_matches;
+    }
+    let best_score = unique_matches[0].score;
+    unique_matches.retain(|m| m.score >= best_score * 0.9);
 
-    final_matches
+    unique_matches
 }
 
 pub fn find_hunk_location(
@@ -140,6 +151,7 @@ pub fn find_hunk_location(
             start_index: hunk.old_start,
             matched_length: 0,
             score: 1.0,
+            density: 1.0,
         });
         return matches;
     }
@@ -155,6 +167,7 @@ pub fn find_hunk_location(
             start_index,
             matched_length: anchor_lines.len(),
             score: 1.0,
+            density: 1.0,
         });
         return matches;
     }
@@ -194,12 +207,18 @@ pub fn find_hunk_location(
                 let clean_end_idx = clean_start_idx + clean_anchor.len() - 1;
                 let original_end_index = clean_source_map[clean_end_idx].0;
 
-                let consumed_lines = original_end_index - original_start_index + 1;
+                let matched_length = original_end_index - original_start_index + 1;
+                let density = if matched_length > 0 {
+                    clean_anchor.len() as f32 / matched_length as f32
+                } else {
+                    1.0
+                };
 
                 matches.push(HunkMatch {
                     start_index: original_start_index,
-                    matched_length: consumed_lines,
+                    matched_length,
                     score: 0.9,
+                    density,
                 });
             }
         }
@@ -215,12 +234,27 @@ pub fn find_hunk_location(
             println!("[DEBUG]   -> Trying anchor-point heuristic match...");
         }
 
+        let num_additions = hunk.lines.iter().filter(|l| matches!(l, Line::Addition(_))).count();
+        let num_removals = hunk.lines.iter().filter(|l| matches!(l, Line::Removal(_))).count();
+        let change_magnitude = num_additions + num_removals;
+
+        let adaptive_window = anchor_lines.len() + std::cmp::max(10, 4 * change_magnitude);
+        let search_window_size = std::cmp::min(adaptive_window, 400); // Hard cap for performance
+
+        if debug_mode {
+            println!("[DEBUG]     - Adaptive search window size: {}", search_window_size);
+        }
+
+        let top_anchor_original_line = anchor_lines.first().unwrap();
+        let top_anchor_indent = get_indentation(top_anchor_original_line);
+
         let top_anchor = clean_anchor.first().unwrap();
         let bottom_anchor = clean_anchor.last().unwrap();
 
         for (clean_idx, (original_idx_top, normalized_line_top)) in clean_source_map.iter().enumerate() {
             if normalized_line_top == top_anchor {
-                let search_window_end = (*original_idx_top + anchor_lines.len() + 50).min(source_lines.len());
+                let search_window_end =
+                    (*original_idx_top + search_window_size).min(source_lines.len());
 
                 for (_, (original_idx_bottom, normalized_line_bottom)) in clean_source_map.iter().enumerate().skip(clean_idx + 1) {
                     if *original_idx_bottom >= search_window_end {
@@ -232,7 +266,20 @@ pub fn find_hunk_location(
                         let length = *original_idx_bottom - start_index + 1;
                         let candidate_block = &source_lines[start_index..=*original_idx_bottom];
 
-                        let score = calculate_match_score(&clean_anchor, candidate_block);
+                        let mut score = calculate_match_score(&clean_anchor, candidate_block);
+                        let candidate_top_anchor_line = &source_lines[*original_idx_top];
+                        let candidate_indent = get_indentation(candidate_top_anchor_line);
+                        if top_anchor_indent == candidate_indent {
+                            let original_score = score;
+                            score = (score + 0.01).min(1.0);
+                            if debug_mode && score > original_score {
+                                println!(
+                                    "[DEBUG]     - Indentation bonus applied. Score: {:.2} -> {:.2}",
+                                    original_score, score
+                                );
+                            }
+                        }
+
                         if debug_mode {
                             println!(
                                 "[DEBUG]     - Candidate at lines {}-{} scored {:.2}",
@@ -243,10 +290,16 @@ pub fn find_hunk_location(
                         }
 
                         if score >= match_threshold {
+                            let density = if length > 0 {
+                                clean_anchor.len() as f32 / length as f32
+                            } else {
+                                1.0
+                            };
                             matches.push(HunkMatch {
                                 start_index,
                                 matched_length: length,
                                 score,
+                                density,
                             });
                         }
                     }
@@ -260,24 +313,25 @@ pub fn find_hunk_location(
 }
 
 fn calculate_match_score(clean_anchor: &[String], candidate_block: &[String]) -> f32 {
-    let normalized_candidate_set: HashSet<String> = candidate_block
+    if clean_anchor.is_empty() {
+        return 1.0;
+    }
+
+    let normalized_candidate: Vec<String> = candidate_block
         .iter()
         .map(|s| normalize_line(s))
         .filter(|s| !s.is_empty())
         .collect();
 
-    if normalized_candidate_set.is_empty() {
+    if normalized_candidate.is_empty() {
         return 0.0;
     }
 
-    let mut matches = 0;
-    for anchor_line in clean_anchor {
-        if normalized_candidate_set.contains(anchor_line) {
-            matches += 1;
-        }
-    }
+    let table = LcsTable::new(clean_anchor, &normalized_candidate);
+    let lcs = table.longest_common_subsequence();
+    let lcs_len = lcs.len();
 
-    matches as f32 / clean_anchor.len() as f32
+    lcs_len as f32 / clean_anchor.len() as f32
 }
 
 pub fn apply_hunk(
