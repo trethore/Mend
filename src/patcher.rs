@@ -2,6 +2,7 @@ use crate::diff::{Hunk, Line};
 use lcs::LcsTable;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::error::Error;
 
 #[derive(Debug)]
 pub enum FilePatchResult {
@@ -72,6 +73,8 @@ impl std::fmt::Display for PatchError {
         }
     }
 }
+
+impl Error for PatchError {}
 
 fn get_indentation(s: &str) -> &str {
     s.find(|c: char| !c.is_whitespace()).map_or(s, |i| &s[..i])
@@ -144,8 +147,17 @@ fn deduplicate_matches(matches: Vec<HunkMatch>) -> Vec<HunkMatch> {
     unique_matches
 }
 
+fn find_best_anchor_in_slice<'a>(slice: &[&'a String]) -> Option<&'a String> {
+    slice
+        .iter()
+        .copied()
+        .filter(|l| !l.trim().is_empty())
+        .max_by_key(|l| l.trim().len())
+}
+
 pub fn find_hunk_location(
     source_lines: &[String],
+    clean_source_map: &[(usize, String)],
     hunk: &Hunk,
     fuzziness: u8,
     debug_mode: bool,
@@ -201,13 +213,6 @@ pub fn find_hunk_location(
     if clean_anchor.is_empty() {
         return matches;
     }
-
-    let clean_source_map: Vec<(usize, String)> = source_lines
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (i, normalize_line(s)))
-        .filter(|(_, s)| !s.is_empty())
-        .collect();
 
     if fuzziness >= 1 {
         if debug_mode {
@@ -274,16 +279,33 @@ pub fn find_hunk_location(
             println!("[DEBUG]     - Adaptive search window size: {search_window_size}");
         }
 
-        let top_anchor_original_line = anchor_lines.first().unwrap();
-        let top_anchor_indent = get_indentation(top_anchor_original_line);
+        let (top_anchor_original, bottom_anchor_original) = if anchor_lines.len() > 2 {
+            let mid_point = anchor_lines.len() / 2;
+            let top = find_best_anchor_in_slice(&anchor_lines[..mid_point]);
+            let bottom = find_best_anchor_in_slice(&anchor_lines[mid_point..]);
 
-        let top_anchor = clean_anchor.first().unwrap();
-        let bottom_anchor = clean_anchor.last().unwrap();
+            match (top, bottom) {
+                (Some(t), Some(b)) => (t, b),
+                _ => (
+                    *anchor_lines.first().unwrap(),
+                    *anchor_lines.last().unwrap(),
+                ),
+            }
+        } else {
+            (
+                *anchor_lines.first().unwrap(),
+                *anchor_lines.last().unwrap(),
+            )
+        };
+
+        let top_anchor_indent = get_indentation(top_anchor_original);
+        let top_anchor = normalize_line(top_anchor_original);
+        let bottom_anchor = normalize_line(bottom_anchor_original);
 
         for (clean_idx, (original_idx_top, normalized_line_top)) in
             clean_source_map.iter().enumerate()
         {
-            if normalized_line_top == top_anchor {
+            if normalized_line_top == &top_anchor {
                 let search_window_end =
                     (*original_idx_top + search_window_size).min(source_lines.len());
 
@@ -294,17 +316,25 @@ pub fn find_hunk_location(
                         break;
                     }
 
-                    if normalized_line_bottom == bottom_anchor {
+                    if normalized_line_bottom == &bottom_anchor {
                         let start_index = *original_idx_top;
                         let length = *original_idx_bottom - start_index + 1;
                         let candidate_block = &source_lines[start_index..=*original_idx_bottom];
 
-                        let mut score = calculate_match_score(&clean_anchor, candidate_block);
+                        let lcs_score = calculate_match_score(&clean_anchor, candidate_block);
+                        let density = if length > 0 {
+                            clean_anchor.len() as f32 / length as f32
+                        } else {
+                            1.0
+                        };
+
+                        let mut score = (0.7 * lcs_score) + (0.3 * density);
+
                         let candidate_top_anchor_line = &source_lines[*original_idx_top];
                         let candidate_indent = get_indentation(candidate_top_anchor_line);
                         if top_anchor_indent == candidate_indent {
                             let original_score = score;
-                            score = (score + 0.01).min(1.0);
+                            score = (score + 0.05).min(1.0);
                             if debug_mode && score > original_score {
                                 println!(
                                     "[DEBUG]     - Indentation bonus applied. Score: {original_score:.2} -> {score:.2}"
@@ -314,19 +344,16 @@ pub fn find_hunk_location(
 
                         if debug_mode {
                             println!(
-                                "[DEBUG]     - Candidate at lines {}-{} scored {:.2}",
+                                "[DEBUG]     - Candidate at lines {}-{} scored {:.2} (LCS: {:.2}, Density: {:.2})",
                                 start_index + 1,
                                 *original_idx_bottom + 1,
-                                score
+                                score,
+                                lcs_score,
+                                density
                             );
                         }
 
                         if score >= match_threshold {
-                            let density = if length > 0 {
-                                clean_anchor.len() as f32 / length as f32
-                            } else {
-                                1.0
-                            };
                             matches.push(HunkMatch {
                                 start_index,
                                 matched_length: length,
@@ -386,6 +413,6 @@ pub fn apply_hunk(
     result
 }
 
-fn normalize_line(line: &str) -> String {
+pub fn normalize_line(line: &str) -> String {
     line.trim().to_string()
 }

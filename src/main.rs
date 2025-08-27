@@ -1,15 +1,16 @@
 use clap::Parser;
 use is_terminal::IsTerminal;
 use std::cmp::min;
-use std::fs;
+use std::error::Error;
 use std::io::{self, Error as IoError, Read};
 use std::path::{Path, PathBuf};
 
 use clipboard::{ClipboardContext, ClipboardProvider};
 
-use mend::diff::FileDiff;
+use mend::diff::{FileDiff, Patch};
 use mend::parser;
 use mend::patcher::{self, FilePatchResult, PatchError};
+use std::{fs, process};
 
 const EXAMPLE_DIFF: &str = include_str!("../resources/example.diff");
 
@@ -159,10 +160,18 @@ fn resolve_file_diff_interactively(
             .map(String::from)
             .collect()
     };
+
+    let clean_source_map: Vec<(usize, String)> = source_lines
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i, patcher::normalize_line(s)))
+        .filter(|(_, s)| !s.is_empty())
+        .collect();
     for (i, hunk) in file_diff.hunks.iter().enumerate().rev() {
         loop {
             let possible_matches = patcher::find_hunk_location(
                 &source_lines,
+                &clean_source_map,
                 hunk,
                 fuzziness,
                 debug_mode,
@@ -317,9 +326,91 @@ fn apply_changes(results: &[FilePatchResult]) -> io::Result<()> {
     Ok(())
 }
 
-fn main() -> io::Result<()> {
-    let mut args = Args::parse();
+fn get_diff_content(args: &Args) -> Result<String, Box<dyn Error>> {
+    let is_verbose = args.verbose || args.debug;
+    let diff_content = if args.clipboard {
+        if is_verbose {
+            println!("[INFO] Reading diff from clipboard...");
+        }
+        let mut ctx: ClipboardContext = ClipboardProvider::new()
+            .map_err(|e| IoError::other(format!("Failed to initialize clipboard: {e}")))?;
+        ctx.get_contents()
+            .map_err(|e| format!("Failed to read from clipboard: {e}"))?
+    } else {
+        match &args.diff_file {
+            Some(path) => {
+                if is_verbose {
+                    println!("[INFO] Reading diff from file: {path}");
+                }
+                fs::read_to_string(path)
+                    .map_err(|e| format!("Failed to read diff file '{path}': {e}"))?
+            }
+            None => {
+                if io::stdin().is_terminal() {
+                    let help_msg = "No diff file, clipboard flag, or stdin pipe detected.\n\n\
+                    Usage: mend [TARGET_FILE] <DIFF_FILE>\n       \
+                    mend -c [TARGET_FILE]\n       \
+                    git diff | mend [TARGET_FILE]";
+                    return Err(help_msg.into());
+                }
+                if is_verbose {
+                    println!("[INFO] Reading diff from stdin...");
+                }
+                let mut buffer = String::new();
+                io::stdin().read_to_string(&mut buffer)?;
+                buffer
+            }
+        }
+    };
+    Ok(diff_content)
+}
 
+fn process_patch(patch: &Patch, args: &Args) -> Result<Vec<FilePatchResult>, PatchError> {
+    let mut all_patch_results: Vec<FilePatchResult> = Vec::new();
+    let is_verbose = args.verbose || args.debug;
+
+    for (i, file_diff) in patch.diffs.iter().enumerate() {
+        if is_verbose {
+            println!(
+                "[INFO] Processing file diff {}/{} for file '{}'",
+                i + 1,
+                patch.diffs.len(),
+                args.target_file.as_deref().unwrap_or(&file_diff.new_file)
+            );
+        }
+        if let Some(result) = resolve_file_diff_interactively(
+            file_diff,
+            &args.target_file,
+            args.fuzziness,
+            args.debug,
+            args.confirm,
+            args.ci,
+            args.match_threshold,
+        )? {
+            all_patch_results.push(result);
+        }
+    }
+    Ok(all_patch_results)
+}
+
+fn handle_results(results: &[FilePatchResult], dry_run: bool) -> io::Result<()> {
+    if dry_run {
+        println!("\n[DRY RUN] The following changes would be applied:");
+        for result in results {
+            match result {
+                FilePatchResult::Modified { path, .. } => println!("  - [MODIFIED] {path}"),
+                FilePatchResult::Created { path, .. } => println!("  - [CREATED]  {path}"),
+                FilePatchResult::Deleted { path } => println!("  - [DELETED]  {path}"),
+            }
+        }
+    } else {
+        apply_changes(results)?;
+        println!("Successfully applied patch.");
+    }
+    Ok(())
+}
+
+fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     if args.example {
         println!("This is an example diff, please follow the same format.\n");
         println!("{EXAMPLE_DIFF}");
@@ -337,52 +428,14 @@ fn main() -> io::Result<()> {
         println!("----------------------------");
     }
 
-    let diff_content = if args.clipboard {
-        if is_verbose {
-            println!("[INFO] Reading diff from clipboard...");
-        }
-        let mut ctx: ClipboardContext = ClipboardProvider::new()
-            .map_err(|e| IoError::other(format!("Failed to initialize clipboard: {e}")))?;
-        ctx.get_contents()
-            .map_err(|e| IoError::other(format!("Failed to read from clipboard: {e}")))?
-    } else {
-        match args.diff_file {
-            Some(path) => {
-                if is_verbose {
-                    println!("[INFO] Reading diff from file: {path}");
-                }
-                fs::read_to_string(path)?
-            }
-            None => {
-                if io::stdin().is_terminal() {
-                    eprintln!("[ERROR] No diff file, clipboard flag, or stdin pipe detected.");
-                    eprintln!("Usage: mend [TARGET_FILE] <DIFF_FILE>");
-                    eprintln!("Or:    mend -c [TARGET_FILE]");
-                    eprintln!("Or pipe from stdin: git diff | mend [TARGET_FILE]");
-                    std::process::exit(1);
-                }
-                if is_verbose {
-                    println!("[INFO] Reading diff from stdin...");
-                }
-                let mut buffer = String::new();
-                io::stdin().read_to_string(&mut buffer)?;
-                buffer
-            }
-        }
-    };
+    let diff_content = get_diff_content(&args)?;
 
     if diff_content.is_empty() {
-        eprintln!("[ERROR] The diff content is empty.");
-        std::process::exit(1);
+        return Err("The diff content is empty.".into());
     }
 
-    let mut patch = match parser::parse_patch(&diff_content) {
-        Ok(patch) => patch,
-        Err(e) => {
-            eprintln!("[ERROR] Failed to parse patch: {e}");
-            std::process::exit(1);
-        }
-    };
+    let mut patch =
+        parser::parse_patch(&diff_content).map_err(|e| format!("Failed to parse patch: {e}"))?;
 
     if let Some(target_path_str) = &args.target_file {
         let target_path = PathBuf::from(target_path_str);
@@ -395,10 +448,10 @@ fn main() -> io::Result<()> {
         });
 
         if patch.diffs.is_empty() {
-            eprintln!(
-                "[ERROR] No changes found in the patch for the specified target file: {target_path_str}"
-            );
-            std::process::exit(1);
+            return Err(format!(
+                "No changes found in the patch for the specified target file: {target_path_str}",
+            )
+            .into());
         }
     }
 
@@ -412,56 +465,27 @@ fn main() -> io::Result<()> {
             args.fuzziness
         );
     }
-    let mut all_patch_results: Vec<FilePatchResult> = Vec::new();
-    for (i, file_diff) in patch.diffs.iter().enumerate() {
-        if is_verbose {
-            println!(
-                "[INFO] Processing file diff {}/{} for file '{}'",
-                i + 1,
-                patch.diffs.len(),
-                args.target_file.as_deref().unwrap_or(&file_diff.new_file)
-            );
-        }
-        match resolve_file_diff_interactively(
-            file_diff,
-            &args.target_file,
-            args.fuzziness,
-            args.debug,
-            args.confirm,
-            args.ci,
-            args.match_threshold,
-        ) {
-            Ok(Some(result)) => {
-                all_patch_results.push(result);
-            }
-            Ok(None) => {}
-            Err(e) => {
-                eprintln!("[ERROR] Could not apply patch: {e}");
-                eprintln!("[INFO] No files were changed.");
-                std::process::exit(1);
-            }
-        }
-    }
-    if args.dry_run || args.debug {
-        println!("\n[DRY RUN] The following changes would be applied:");
-        for result in all_patch_results {
-            match result {
-                FilePatchResult::Modified { path, .. } => println!("  - [MODIFIED] {path}"),
-                FilePatchResult::Created { path, .. } => println!("  - [CREATED]  {path}"),
-                FilePatchResult::Deleted { path } => println!("  - [DELETED]  {path}"),
-            }
-        }
-    } else {
-        if let Err(e) = apply_changes(&all_patch_results) {
-            eprintln!("[ERROR] A failure occurred while writing changes to disk: {e}");
-            eprintln!("The patching process was aborted. Some files may have been changed.");
-            std::process::exit(1);
-        }
-        println!("Successfully applied patch.");
-    }
+
+    let all_patch_results = process_patch(&patch, &args)
+        .map_err(|e| format!("Could not apply patch: {e}\nNo files were changed."))?;
+
+    handle_results(&all_patch_results, args.dry_run || args.debug).map_err(
+        |e| {
+            format!("A failure occurred while writing changes to disk: {e}\nThe patching process was aborted. Some files may have been changed.")
+        },
+    )?;
+
     if is_verbose {
         println!("----------------------------");
         println!("Execution finished.");
     }
     Ok(())
+}
+
+fn main() {
+    let args = Args::parse();
+    if let Err(e) = run(args) {
+        eprintln!("[ERROR] {e}");
+        process::exit(1);
+    }
 }
