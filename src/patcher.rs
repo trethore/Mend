@@ -77,7 +77,7 @@ fn get_indentation(s: &str) -> &str {
     s.find(|c: char| !c.is_whitespace()).map_or(s, |i| &s[..i])
 }
 
-fn apply_proximity_bonus(matches: &mut Vec<HunkMatch>, old_start_line: usize, debug_mode: bool) {
+fn apply_proximity_bonus(matches: &mut [HunkMatch], old_start_line: usize, debug_mode: bool) {
     const MAX_DISTANCE_FOR_BONUS: usize = 50;
     const MAX_BONUS: f32 = 0.05;
 
@@ -91,8 +91,8 @@ fn apply_proximity_bonus(matches: &mut Vec<HunkMatch>, old_start_line: usize, de
     }
 
     for m in matches.iter_mut() {
-        let distance =
-            (m.start_index as i64 - (old_start_line.saturating_sub(1)) as i64).unsigned_abs() as usize;
+        let distance = (m.start_index as i64 - (old_start_line.saturating_sub(1)) as i64)
+            .unsigned_abs() as usize;
         if distance <= MAX_DISTANCE_FOR_BONUS {
             let bonus = MAX_BONUS * (1.0 - distance as f32 / MAX_DISTANCE_FOR_BONUS as f32);
             let old_score = m.score;
@@ -120,9 +120,7 @@ fn deduplicate_matches(matches: Vec<HunkMatch>) -> Vec<HunkMatch> {
             .entry(m.start_index)
             .or_insert_with(|| m.clone());
 
-        if m.score > entry.score {
-            *entry = m;
-        } else if m.score == entry.score && m.density > entry.density {
+        if m.score > entry.score || (m.score == entry.score && m.density > entry.density) {
             *entry = m;
         }
     }
@@ -273,9 +271,7 @@ pub fn find_hunk_location(
         let search_window_size = std::cmp::min(adaptive_window, 400);
 
         if debug_mode {
-            println!(
-                "[DEBUG]     - Adaptive search window size: {search_window_size}"
-            );
+            println!("[DEBUG]     - Adaptive search window size: {search_window_size}");
         }
 
         let top_anchor_original_line = anchor_lines.first().unwrap();

@@ -27,17 +27,15 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, String> {
             continue;
         }
 
-        if line.starts_with("---") {
-            if line.trim().chars().all(|c| c == '-') {
+        if let Some(stripped) = line.strip_prefix("---") {
+            if stripped.trim().is_empty() {
                 continue;
             }
-
             if current_file_diff.is_none() {
                 current_file_diff = Some(FileDiff::default());
             }
-
             if let Some(diff) = current_file_diff.as_mut() {
-                let path_part = line[3..].trim();
+                let path_part = stripped.trim();
                 let path_candidate = if path_part.contains(char::is_whitespace) {
                     path_part.split_whitespace().last().unwrap_or(path_part)
                 } else {
@@ -53,17 +51,15 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, String> {
             continue;
         }
 
-        if line.starts_with("+++") {
-            if line.trim().chars().all(|c| c == '+') {
+        if let Some(stripped) = line.strip_prefix("+++") {
+            if stripped.trim().is_empty() {
                 continue;
             }
-
             if current_file_diff.is_none() {
                 current_file_diff = Some(FileDiff::default());
             }
-
             if let Some(diff) = current_file_diff.as_mut() {
-                let path_part = line[3..].trim();
+                let path_part = stripped.trim();
                 let path_candidate = if path_part.contains(char::is_whitespace) {
                     path_part.split_whitespace().last().unwrap_or(path_part)
                 } else {

@@ -97,19 +97,26 @@ fn print_match_context(
     );
     let start_line = hunk_match.start_index;
     let context_before_start = start_line.saturating_sub(CONTEXT_LINES);
-    for i in context_before_start..start_line {
-        eprintln!("  {:>4} | {}", i + 1, source_lines[i]);
+    for (i, line) in source_lines
+        .iter()
+        .enumerate()
+        .take(start_line)
+        .skip(context_before_start)
+    {
+        eprintln!("  {:>4} | {}", i + 1, line);
     }
     eprintln!(
         "  ---- | --- (Patch would be applied here, replacing {} lines) ---",
         hunk_match.matched_length
     );
     let end_line = start_line + hunk_match.matched_length;
-    let context_after_end = min(source_lines.len(), end_line + CONTEXT_LINES);
-    for i in end_line..context_after_end {
-        if i < source_lines.len() {
-            eprintln!("  {:>4} | {}", i + 1, source_lines[i]);
-        }
+    for (i, line) in source_lines
+        .iter()
+        .enumerate()
+        .take(min(source_lines.len(), end_line + CONTEXT_LINES))
+        .skip(end_line)
+    {
+        eprintln!("  {:>4} | {}", i + 1, line);
     }
 }
 fn resolve_file_diff_interactively(
@@ -334,16 +341,10 @@ fn main() -> io::Result<()> {
         if is_verbose {
             println!("[INFO] Reading diff from clipboard...");
         }
-        let mut ctx: ClipboardContext = ClipboardProvider::new().map_err(|e| {
-            IoError::other(
-                format!("Failed to initialize clipboard: {e}"),
-            )
-        })?;
-        ctx.get_contents().map_err(|e| {
-            IoError::other(
-                format!("Failed to read from clipboard: {e}"),
-            )
-        })?
+        let mut ctx: ClipboardContext = ClipboardProvider::new()
+            .map_err(|e| IoError::other(format!("Failed to initialize clipboard: {e}")))?;
+        ctx.get_contents()
+            .map_err(|e| IoError::other(format!("Failed to read from clipboard: {e}")))?
     } else {
         match args.diff_file {
             Some(path) => {
@@ -452,9 +453,7 @@ fn main() -> io::Result<()> {
         }
     } else {
         if let Err(e) = apply_changes(&all_patch_results) {
-            eprintln!(
-                "[ERROR] A failure occurred while writing changes to disk: {e}"
-            );
+            eprintln!("[ERROR] A failure occurred while writing changes to disk: {e}");
             eprintln!("The patching process was aborted. Some files may have been changed.");
             std::process::exit(1);
         }
