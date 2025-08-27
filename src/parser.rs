@@ -1,7 +1,24 @@
 use crate::diff::{FileDiff, Hunk, Line, Patch};
 use regex::Regex;
 
-pub fn parse_patch(patch_content: &str) -> Result<Patch, String> {
+#[derive(Debug)]
+pub struct ParseError {
+    pub line_number: usize,
+    pub line_content: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "on line {}: {}\n   L content: '{}'",
+            self.line_number, self.message, self.line_content
+        )
+    }
+}
+
+pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
     let hunk_header_re =
         Regex::new(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").expect("Invalid regex");
     let mut patch = Patch::default();
@@ -18,7 +35,7 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, String> {
         }
     };
 
-    for raw_line in patch_content.lines() {
+    for (line_number, raw_line) in patch_content.lines().enumerate() {
         let line = raw_line;
 
         if line.starts_with("diff --git ") {
@@ -82,10 +99,26 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, String> {
         if line.starts_with("@@") {
             let mut new_hunk = Hunk::default();
             if let Some(caps) = hunk_header_re.captures(line) {
-                new_hunk.old_start = caps.get(1).map_or(0, |m| m.as_str().parse().unwrap_or(0));
-                new_hunk.old_lines = caps.get(2).map_or(1, |m| m.as_str().parse().unwrap_or(1));
-                new_hunk.new_start = caps.get(3).map_or(0, |m| m.as_str().parse().unwrap_or(0));
-                new_hunk.new_lines = caps.get(4).map_or(1, |m| m.as_str().parse().unwrap_or(1));
+                let parse_num = |group: usize, default: usize| -> Result<usize, ParseError> {
+                    caps.get(group)
+                        .map_or(Ok(default), |m| m.as_str().parse::<usize>())
+                        .map_err(|e| ParseError {
+                            line_number: line_number + 1,
+                            line_content: line.to_string(),
+                            message: format!("Invalid number in hunk header: {e}"),
+                        })
+                };
+
+                new_hunk.old_start = parse_num(1, 0)?;
+                new_hunk.old_lines = parse_num(2, 1)?;
+                new_hunk.new_start = parse_num(3, 0)?;
+                new_hunk.new_lines = parse_num(4, 1)?;
+            } else {
+                return Err(ParseError {
+                    line_number: line_number + 1,
+                    line_content: line.to_string(),
+                    message: "Malformed hunk header".to_string(),
+                });
             }
 
             if let Some(diff) = current_file_diff.as_mut() {

@@ -1,11 +1,11 @@
 use clap::Parser;
 use is_terminal::IsTerminal;
 use std::cmp::min;
-use std::error::Error;
-use std::io::{self, Error as IoError, Read};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use clipboard::{ClipboardContext, ClipboardProvider};
+use mend::error::AppError;
 
 use mend::diff::{FileDiff, Patch};
 use mend::parser;
@@ -13,6 +13,53 @@ use mend::patcher::{self, FilePatchResult, PatchError};
 use std::{fs, process};
 
 const EXAMPLE_DIFF: &str = include_str!("../resources/example.diff");
+
+#[derive(Default, Debug)]
+struct Report {
+    files_modified: usize,
+    files_created: usize,
+    files_deleted: usize,
+    hunks_applied: usize,
+    hunks_skipped: usize,
+    warnings: Vec<String>,
+}
+
+impl Report {
+    fn summary(&self, dry_run: bool) -> String {
+        let mut s = String::new();
+        if !dry_run {
+            if self.warnings.is_empty() {
+                s.push_str("✔ Patch applied successfully.\n");
+            } else {
+                s.push_str("✔ Patch applied with warnings.\n");
+            }
+        }
+
+        s.push_str("\n--- Summary ---\n");
+        if self.files_created > 0 {
+            s.push_str(&format!("Files created:  {}\n", self.files_created));
+        }
+        if self.files_modified > 0 {
+            s.push_str(&format!("Files modified: {}\n", self.files_modified));
+        }
+        if self.files_deleted > 0 {
+            s.push_str(&format!("Files deleted:  {}\n", self.files_deleted));
+        }
+        s.push_str(&format!("Hunks applied:  {}\n", self.hunks_applied));
+        if self.hunks_skipped > 0 {
+            s.push_str(&format!("Hunks skipped:  {}\n", self.hunks_skipped));
+        }
+
+        if !self.warnings.is_empty() {
+            s.push_str("\n--- Warnings ---\n");
+            for warning in &self.warnings {
+                s.push_str(&format!("- {warning}\n"));
+            }
+        }
+
+        s
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -120,14 +167,20 @@ fn print_match_context(
         eprintln!("  {:>4} | {}", i + 1, line);
     }
 }
-fn resolve_file_diff_interactively(
-    file_diff: &FileDiff,
-    cli_target_path: &Option<String>,
+
+struct PatcherOptions {
     fuzziness: u8,
     debug_mode: bool,
     confirm: bool,
     ci: bool,
     match_threshold: f32,
+}
+
+fn resolve_file_diff_interactively(
+    file_diff: &FileDiff,
+    cli_target_path: &Option<String>,
+    options: &PatcherOptions,
+    report: &mut Report,
 ) -> Result<Option<FilePatchResult>, PatchError> {
     let old_path = cli_target_path
         .clone()
@@ -152,7 +205,9 @@ fn resolve_file_diff_interactively(
             )));
         }
         if is_binary(path).unwrap_or(false) {
-            eprintln!("[WARN] Skipping binary file: {old_path}");
+            report
+                .warnings
+                .push(format!("Skipped binary file: {old_path}"));
             return Ok(None);
         }
         fs::read_to_string(path)?
@@ -173,12 +228,12 @@ fn resolve_file_diff_interactively(
                 &source_lines,
                 &clean_source_map,
                 hunk,
-                fuzziness,
-                debug_mode,
-                match_threshold,
+                options.fuzziness,
+                options.debug_mode,
+                options.match_threshold,
             );
             if possible_matches.is_empty() {
-                if ci {
+                if options.ci {
                     return Err(PatchError::HunkApplicationFailed {
                         file_path: new_path.clone(),
                         hunk_index: i,
@@ -193,6 +248,7 @@ fn resolve_file_diff_interactively(
                 eprintln!("Do you want to [s]kip this hunk or [a]bort the process? (s/a)");
                 let choice = read_user_input();
                 if choice.to_lowercase() == "s" {
+                    report.hunks_skipped += 1;
                     break;
                 } else if choice.to_lowercase() == "a" {
                     return Err(PatchError::HunkApplicationFailed {
@@ -205,7 +261,7 @@ fn resolve_file_diff_interactively(
                     continue;
                 }
             } else if possible_matches.len() > 1 {
-                if ci {
+                if options.ci {
                     return Err(PatchError::AmbiguousMatch {
                         file_path: new_path.clone(),
                         hunk_index: i,
@@ -224,6 +280,7 @@ fn resolve_file_diff_interactively(
                 );
                 let choice = read_user_input();
                 if choice.to_lowercase() == "s" {
+                    report.hunks_skipped += 1;
                     break;
                 } else if choice.to_lowercase() == "a" {
                     return Err(PatchError::AmbiguousMatch {
@@ -233,6 +290,16 @@ fn resolve_file_diff_interactively(
                 } else if let Ok(index) = choice.parse::<usize>() {
                     if index > 0 && index <= possible_matches.len() {
                         let chosen_match = &possible_matches[index - 1];
+                        if chosen_match.score < 0.9 {
+                            report.warnings.push(format!(
+                                "Hunk {} in '{}' was applied with a fuzzy match score ({:.2}). Please review.",
+                                i + 1,
+                                new_path,
+                                chosen_match.score
+                            ));
+                        }
+
+                        report.hunks_applied += 1;
                         source_lines = patcher::apply_hunk(
                             &source_lines,
                             hunk,
@@ -250,7 +317,7 @@ fn resolve_file_diff_interactively(
                 }
             } else {
                 let chosen_match = &possible_matches[0];
-                if !ci && (confirm || chosen_match.score < 1.0) {
+                if !options.ci && (options.confirm || chosen_match.score < 1.0) {
                     eprintln!(
                         "[INFO] Found a single match for hunk {} in file {}.",
                         i + 1,
@@ -260,6 +327,16 @@ fn resolve_file_diff_interactively(
                     eprintln!("\nApply this hunk? [y]es, [s]kip, [a]bort (y/s/a)");
                     let choice = read_user_input();
                     if choice.to_lowercase() == "y" {
+                        if chosen_match.score < 0.9 {
+                            report.warnings.push(format!(
+                                "Hunk {} in '{}' was applied with a fuzzy match score ({:.2}). Please review.",
+                                i + 1,
+                                new_path,
+                                chosen_match.score
+                            ));
+                        }
+
+                        report.hunks_applied += 1;
                         source_lines = patcher::apply_hunk(
                             &source_lines,
                             hunk,
@@ -268,6 +345,7 @@ fn resolve_file_diff_interactively(
                         );
                         break;
                     } else if choice.to_lowercase() == "s" {
+                        report.hunks_skipped += 1;
                         break;
                     } else if choice.to_lowercase() == "a" {
                         return Err(PatchError::HunkApplicationFailed {
@@ -280,6 +358,16 @@ fn resolve_file_diff_interactively(
                         continue;
                     }
                 } else {
+                    if chosen_match.score < 0.9 {
+                        report.warnings.push(format!(
+                            "Hunk {} in '{}' was applied with a fuzzy match score ({:.2}). Please review.",
+                            i + 1,
+                            new_path,
+                            chosen_match.score
+                        ));
+                    }
+
+                    report.hunks_applied += 1;
                     source_lines = patcher::apply_hunk(
                         &source_lines,
                         hunk,
@@ -326,32 +414,27 @@ fn apply_changes(results: &[FilePatchResult]) -> io::Result<()> {
     Ok(())
 }
 
-fn get_diff_content(args: &Args) -> Result<String, Box<dyn Error>> {
+fn get_diff_content(args: &Args) -> Result<String, AppError> {
     let is_verbose = args.verbose || args.debug;
     let diff_content = if args.clipboard {
         if is_verbose {
             println!("[INFO] Reading diff from clipboard...");
         }
-        let mut ctx: ClipboardContext = ClipboardProvider::new()
-            .map_err(|e| IoError::other(format!("Failed to initialize clipboard: {e}")))?;
+        let mut ctx: ClipboardContext =
+            ClipboardProvider::new().map_err(|e| AppError::Clipboard(e.to_string()))?;
         ctx.get_contents()
-            .map_err(|e| format!("Failed to read from clipboard: {e}"))?
+            .map_err(|e| AppError::Clipboard(e.to_string()))?
     } else {
         match &args.diff_file {
             Some(path) => {
                 if is_verbose {
                     println!("[INFO] Reading diff from file: {path}");
                 }
-                fs::read_to_string(path)
-                    .map_err(|e| format!("Failed to read diff file '{path}': {e}"))?
+                fs::read_to_string(path)?
             }
             None => {
                 if io::stdin().is_terminal() {
-                    let help_msg = "No diff file, clipboard flag, or stdin pipe detected.\n\n\
-                    Usage: mend [TARGET_FILE] <DIFF_FILE>\n       \
-                    mend -c [TARGET_FILE]\n       \
-                    git diff | mend [TARGET_FILE]";
-                    return Err(help_msg.into());
+                    return Err(AppError::NoInput);
                 }
                 if is_verbose {
                     println!("[INFO] Reading diff from stdin...");
@@ -365,7 +448,19 @@ fn get_diff_content(args: &Args) -> Result<String, Box<dyn Error>> {
     Ok(diff_content)
 }
 
-fn process_patch(patch: &Patch, args: &Args) -> Result<Vec<FilePatchResult>, PatchError> {
+fn process_patch(
+    patch: &Patch,
+    args: &Args,
+    report: &mut Report,
+) -> Result<Vec<FilePatchResult>, AppError> {
+    let options = PatcherOptions {
+        fuzziness: args.fuzziness,
+        debug_mode: args.debug,
+        confirm: args.confirm,
+        ci: args.ci,
+        match_threshold: args.match_threshold,
+    };
+
     let mut all_patch_results: Vec<FilePatchResult> = Vec::new();
     let is_verbose = args.verbose || args.debug;
 
@@ -381,11 +476,8 @@ fn process_patch(patch: &Patch, args: &Args) -> Result<Vec<FilePatchResult>, Pat
         if let Some(result) = resolve_file_diff_interactively(
             file_diff,
             &args.target_file,
-            args.fuzziness,
-            args.debug,
-            args.confirm,
-            args.ci,
-            args.match_threshold,
+            &options,
+            report,
         )? {
             all_patch_results.push(result);
         }
@@ -393,7 +485,19 @@ fn process_patch(patch: &Patch, args: &Args) -> Result<Vec<FilePatchResult>, Pat
     Ok(all_patch_results)
 }
 
-fn handle_results(results: &[FilePatchResult], dry_run: bool) -> io::Result<()> {
+fn handle_results(
+    results: &[FilePatchResult],
+    dry_run: bool,
+    report: &mut Report,
+) -> io::Result<()> {
+    for result in results {
+        match result {
+            FilePatchResult::Modified { .. } => report.files_modified += 1,
+            FilePatchResult::Created { .. } => report.files_created += 1,
+            FilePatchResult::Deleted { .. } => report.files_deleted += 1,
+        }
+    }
+
     if dry_run {
         println!("\n[DRY RUN] The following changes would be applied:");
         for result in results {
@@ -403,20 +507,20 @@ fn handle_results(results: &[FilePatchResult], dry_run: bool) -> io::Result<()> 
                 FilePatchResult::Deleted { path } => println!("  - [DELETED]  {path}"),
             }
         }
+    }
+
+    if !results.is_empty() {
+        if !dry_run {
+            apply_changes(results)?;
+        }
+        println!("{}", report.summary(dry_run));
     } else {
-        apply_changes(results)?;
-        println!("Successfully applied patch.");
+        println!("No changes were applied.");
     }
     Ok(())
 }
 
-fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
-    if args.example {
-        println!("This is an example diff, please follow the same format.\n");
-        println!("{EXAMPLE_DIFF}");
-        return Ok(());
-    }
-
+fn main_logic(mut args: Args) -> Result<(), AppError> {
     let is_verbose = args.verbose || args.debug;
 
     if !args.clipboard && args.target_file.is_some() && args.diff_file.is_none() {
@@ -431,11 +535,10 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     let diff_content = get_diff_content(&args)?;
 
     if diff_content.is_empty() {
-        return Err("The diff content is empty.".into());
+        return Err(AppError::EmptyDiff);
     }
 
-    let mut patch =
-        parser::parse_patch(&diff_content).map_err(|e| format!("Failed to parse patch: {e}"))?;
+    let mut patch = parser::parse_patch(&diff_content)?;
 
     if let Some(target_path_str) = &args.target_file {
         let target_path = PathBuf::from(target_path_str);
@@ -448,10 +551,9 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         });
 
         if patch.diffs.is_empty() {
-            return Err(format!(
-                "No changes found in the patch for the specified target file: {target_path_str}",
-            )
-            .into());
+            return Err(AppError::NoMatchingChanges {
+                target_file: target_path_str.clone(),
+            });
         }
     }
 
@@ -466,14 +568,10 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let all_patch_results = process_patch(&patch, &args)
-        .map_err(|e| format!("Could not apply patch: {e}\nNo files were changed."))?;
+    let mut report = Report::default();
+    let all_patch_results = process_patch(&patch, &args, &mut report)?;
 
-    handle_results(&all_patch_results, args.dry_run || args.debug).map_err(
-        |e| {
-            format!("A failure occurred while writing changes to disk: {e}\nThe patching process was aborted. Some files may have been changed.")
-        },
-    )?;
+    handle_results(&all_patch_results, args.dry_run || args.debug, &mut report)?;
 
     if is_verbose {
         println!("----------------------------");
@@ -482,9 +580,18 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn main() {
+fn run() -> Result<(), AppError> {
     let args = Args::parse();
-    if let Err(e) = run(args) {
+    if args.example {
+        println!("This is an example diff, please follow the same format.\n");
+        println!("{EXAMPLE_DIFF}");
+        return Ok(());
+    }
+    main_logic(args)
+}
+
+fn main() {
+    if let Err(e) = run() {
         eprintln!("[ERROR] {e}");
         process::exit(1);
     }
