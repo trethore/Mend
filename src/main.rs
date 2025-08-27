@@ -2,16 +2,14 @@ use clap::Parser;
 use is_terminal::IsTerminal;
 use std::cmp::min;
 use std::fs;
-use std::io::{self, Error as IoError, ErrorKind, Read};
+use std::io::{self, Error as IoError, Read};
 use std::path::{Path, PathBuf};
 
 use clipboard::{ClipboardContext, ClipboardProvider};
 
-mod diff;
-mod parser;
-mod patcher;
-use diff::FileDiff;
-use patcher::{FilePatchResult, PatchError};
+use mend::diff::FileDiff;
+use mend::parser;
+use mend::patcher::{self, FilePatchResult, PatchError};
 
 const EXAMPLE_DIFF: &str = include_str!("../resources/example.diff");
 
@@ -123,8 +121,12 @@ fn resolve_file_diff_interactively(
     ci: bool,
     match_threshold: f32,
 ) -> Result<Option<FilePatchResult>, PatchError> {
-    let old_path = cli_target_path.clone().unwrap_or_else(|| file_diff.old_file.clone());
-    let new_path = cli_target_path.clone().unwrap_or_else(|| file_diff.new_file.clone());
+    let old_path = cli_target_path
+        .clone()
+        .unwrap_or_else(|| file_diff.old_file.clone());
+    let new_path = cli_target_path
+        .clone()
+        .unwrap_or_else(|| file_diff.new_file.clone());
     if old_path.is_empty() && new_path != "/dev/null" {
         return Err(PatchError::IOError("Could not determine target file. The diff has no file headers. Please specify the target file: `mend <TARGET_FILE> [DIFF_FILE]`".to_string()));
     }
@@ -136,10 +138,13 @@ fn resolve_file_diff_interactively(
     } else {
         let path = Path::new(&old_path);
         if !path.exists() {
-             return Err(PatchError::IOError(format!("Original file not found: {}", path.display())));
+            return Err(PatchError::IOError(format!(
+                "Original file not found: {}",
+                path.display()
+            )));
         }
         if is_binary(path).unwrap_or(false) {
-            eprintln!("[WARN] Skipping binary file: {}", old_path);
+            eprintln!("[WARN] Skipping binary file: {old_path}");
             return Ok(None);
         }
         fs::read_to_string(path)?
@@ -149,58 +154,122 @@ fn resolve_file_diff_interactively(
     };
     for (i, hunk) in file_diff.hunks.iter().enumerate().rev() {
         loop {
-            let possible_matches = patcher::find_hunk_location(&source_lines, hunk, fuzziness, debug_mode, match_threshold);
+            let possible_matches = patcher::find_hunk_location(
+                &source_lines,
+                hunk,
+                fuzziness,
+                debug_mode,
+                match_threshold,
+            );
             if possible_matches.is_empty() {
                 if ci {
-                    return Err(PatchError::HunkApplicationFailed { file_path: new_path.clone(), hunk_index: i, reason: "No matching context found in CI mode.".to_string() });
+                    return Err(PatchError::HunkApplicationFailed {
+                        file_path: new_path.clone(),
+                        hunk_index: i,
+                        reason: "No matching context found in CI mode.".to_string(),
+                    });
                 }
-                eprintln!("[ERROR] Failed to apply hunk {} for file {}. No matching context found.", i + 1, new_path);
+                eprintln!(
+                    "[ERROR] Failed to apply hunk {} for file {}. No matching context found.",
+                    i + 1,
+                    new_path
+                );
                 eprintln!("Do you want to [s]kip this hunk or [a]bort the process? (s/a)");
                 let choice = read_user_input();
-                if choice.to_lowercase() == "s" { break; }
-                else if choice.to_lowercase() == "a" {
-                    return Err(PatchError::HunkApplicationFailed { file_path: new_path.clone(), hunk_index: i, reason: "User aborted due to unresolvable hunk.".to_string() });
-                } else { eprintln!("Invalid choice. Please enter 's' to skip or 'a' to abort."); continue; }
+                if choice.to_lowercase() == "s" {
+                    break;
+                } else if choice.to_lowercase() == "a" {
+                    return Err(PatchError::HunkApplicationFailed {
+                        file_path: new_path.clone(),
+                        hunk_index: i,
+                        reason: "User aborted due to unresolvable hunk.".to_string(),
+                    });
+                } else {
+                    eprintln!("Invalid choice. Please enter 's' to skip or 'a' to abort.");
+                    continue;
+                }
             } else if possible_matches.len() > 1 {
                 if ci {
-                    return Err(PatchError::AmbiguousMatch { file_path: new_path.clone(), hunk_index: i });
+                    return Err(PatchError::AmbiguousMatch {
+                        file_path: new_path.clone(),
+                        hunk_index: i,
+                    });
                 }
-                eprintln!("[ERROR] Ambiguous match for hunk {} in file {}. Possible locations:", i + 1, new_path);
+                eprintln!(
+                    "[ERROR] Ambiguous match for hunk {} in file {}. Possible locations:",
+                    i + 1,
+                    new_path
+                );
                 for (idx, m) in possible_matches.iter().enumerate() {
                     print_match_context(&source_lines, m, idx + 1);
                 }
-                eprintln!("\nEnter the index of the correct location, [s]kip this hunk, or [a]bort: ");
+                eprintln!(
+                    "\nEnter the index of the correct location, [s]kip this hunk, or [a]bort: "
+                );
                 let choice = read_user_input();
-                if choice.to_lowercase() == "s" { break; }
-                else if choice.to_lowercase() == "a" {
-                    return Err(PatchError::AmbiguousMatch { file_path: new_path.clone(), hunk_index: i });
+                if choice.to_lowercase() == "s" {
+                    break;
+                } else if choice.to_lowercase() == "a" {
+                    return Err(PatchError::AmbiguousMatch {
+                        file_path: new_path.clone(),
+                        hunk_index: i,
+                    });
                 } else if let Ok(index) = choice.parse::<usize>() {
                     if index > 0 && index <= possible_matches.len() {
                         let chosen_match = &possible_matches[index - 1];
-                        source_lines = patcher::apply_hunk(&source_lines, hunk, chosen_match.start_index, chosen_match.matched_length);
+                        source_lines = patcher::apply_hunk(
+                            &source_lines,
+                            hunk,
+                            chosen_match.start_index,
+                            chosen_match.matched_length,
+                        );
                         break;
-                    } else { eprintln!("Invalid index. Please enter a valid number, 's', or 'a'."); continue; }
-                } else { eprintln!("Invalid choice. Please enter a valid number, 's', or 'a'."); continue; }
+                    } else {
+                        eprintln!("Invalid index. Please enter a valid number, 's', or 'a'.");
+                        continue;
+                    }
+                } else {
+                    eprintln!("Invalid choice. Please enter a valid number, 's', or 'a'.");
+                    continue;
+                }
             } else {
                 let chosen_match = &possible_matches[0];
                 if !ci && (confirm || chosen_match.score < 1.0) {
-                    eprintln!("[INFO] Found a single match for hunk {} in file {}.", i + 1, new_path);
+                    eprintln!(
+                        "[INFO] Found a single match for hunk {} in file {}.",
+                        i + 1,
+                        new_path
+                    );
                     print_match_context(&source_lines, chosen_match, 1);
                     eprintln!("\nApply this hunk? [y]es, [s]kip, [a]bort (y/s/a)");
                     let choice = read_user_input();
                     if choice.to_lowercase() == "y" {
-                        source_lines = patcher::apply_hunk(&source_lines, hunk, chosen_match.start_index, chosen_match.matched_length);
+                        source_lines = patcher::apply_hunk(
+                            &source_lines,
+                            hunk,
+                            chosen_match.start_index,
+                            chosen_match.matched_length,
+                        );
                         break;
                     } else if choice.to_lowercase() == "s" {
                         break;
                     } else if choice.to_lowercase() == "a" {
-                        return Err(PatchError::HunkApplicationFailed { file_path: new_path.clone(), hunk_index: i, reason: "User aborted during confirmation.".to_string() });
+                        return Err(PatchError::HunkApplicationFailed {
+                            file_path: new_path.clone(),
+                            hunk_index: i,
+                            reason: "User aborted during confirmation.".to_string(),
+                        });
                     } else {
                         eprintln!("Invalid choice. Please enter 'y', 's', or 'a'.");
                         continue;
                     }
                 } else {
-                    source_lines = patcher::apply_hunk(&source_lines, hunk, chosen_match.start_index, chosen_match.matched_length);
+                    source_lines = patcher::apply_hunk(
+                        &source_lines,
+                        hunk,
+                        chosen_match.start_index,
+                        chosen_match.matched_length,
+                    );
                     break;
                 }
             }
@@ -208,22 +277,34 @@ fn resolve_file_diff_interactively(
     }
     let new_content = source_lines.join("\n");
     if old_path == "/dev/null" {
-        Ok(Some(FilePatchResult::Created { path: new_path, new_content }))
+        Ok(Some(FilePatchResult::Created {
+            path: new_path,
+            new_content,
+        }))
     } else {
-        Ok(Some(FilePatchResult::Modified { path: new_path, new_content }))
+        Ok(Some(FilePatchResult::Modified {
+            path: new_path,
+            new_content,
+        }))
     }
 }
 fn apply_changes(results: &[FilePatchResult]) -> io::Result<()> {
     for result in results {
         match result {
-            FilePatchResult::Modified { path, new_content } => { fs::write(path, new_content)?; }
+            FilePatchResult::Modified { path, new_content } => {
+                fs::write(path, new_content)?;
+            }
             FilePatchResult::Created { path, new_content } => {
                 if let Some(parent) = Path::new(path).parent() {
-                    if !parent.exists() { fs::create_dir_all(parent)?; }
+                    if !parent.exists() {
+                        fs::create_dir_all(parent)?;
+                    }
                 }
                 fs::write(path, new_content)?;
             }
-            FilePatchResult::Deleted { path } => { fs::remove_file(path)?; }
+            FilePatchResult::Deleted { path } => {
+                fs::remove_file(path)?;
+            }
         }
     }
     Ok(())
@@ -234,7 +315,7 @@ fn main() -> io::Result<()> {
 
     if args.example {
         println!("This is an example diff, please follow the same format.\n");
-        println!("{}", EXAMPLE_DIFF);
+        println!("{EXAMPLE_DIFF}");
         return Ok(());
     }
 
@@ -254,16 +335,20 @@ fn main() -> io::Result<()> {
             println!("[INFO] Reading diff from clipboard...");
         }
         let mut ctx: ClipboardContext = ClipboardProvider::new().map_err(|e| {
-            IoError::new(ErrorKind::Other, format!("Failed to initialize clipboard: {}", e))
+            IoError::other(
+                format!("Failed to initialize clipboard: {e}"),
+            )
         })?;
         ctx.get_contents().map_err(|e| {
-            IoError::new(ErrorKind::Other, format!("Failed to read from clipboard: {}", e))
+            IoError::other(
+                format!("Failed to read from clipboard: {e}"),
+            )
         })?
     } else {
         match args.diff_file {
             Some(path) => {
                 if is_verbose {
-                    println!("[INFO] Reading diff from file: {}", path);
+                    println!("[INFO] Reading diff from file: {path}");
                 }
                 fs::read_to_string(path)?
             }
@@ -293,7 +378,7 @@ fn main() -> io::Result<()> {
     let mut patch = match parser::parse_patch(&diff_content) {
         Ok(patch) => patch,
         Err(e) => {
-            eprintln!("[ERROR] Failed to parse patch: {}", e);
+            eprintln!("[ERROR] Failed to parse patch: {e}");
             std::process::exit(1);
         }
     };
@@ -309,14 +394,22 @@ fn main() -> io::Result<()> {
         });
 
         if patch.diffs.is_empty() {
-            eprintln!("[ERROR] No changes found in the patch for the specified target file: {}", target_path_str);
+            eprintln!(
+                "[ERROR] No changes found in the patch for the specified target file: {target_path_str}"
+            );
             std::process::exit(1);
         }
     }
 
     if is_verbose {
-        println!("[INFO] Parsed patch with {} file diff(s).", patch.diffs.len());
-        println!("[INFO] Applying patches with fuzziness level {}.", args.fuzziness);
+        println!(
+            "[INFO] Parsed patch with {} file diff(s).",
+            patch.diffs.len()
+        );
+        println!(
+            "[INFO] Applying patches with fuzziness level {}.",
+            args.fuzziness
+        );
     }
     let mut all_patch_results: Vec<FilePatchResult> = Vec::new();
     for (i, file_diff) in patch.diffs.iter().enumerate() {
@@ -342,7 +435,7 @@ fn main() -> io::Result<()> {
             }
             Ok(None) => {}
             Err(e) => {
-                eprintln!("[ERROR] Could not apply patch: {}", e);
+                eprintln!("[ERROR] Could not apply patch: {e}");
                 eprintln!("[INFO] No files were changed.");
                 std::process::exit(1);
             }
@@ -352,14 +445,16 @@ fn main() -> io::Result<()> {
         println!("\n[DRY RUN] The following changes would be applied:");
         for result in all_patch_results {
             match result {
-                FilePatchResult::Modified { path, .. } => println!("  - [MODIFIED] {}", path),
-                FilePatchResult::Created { path, .. } => println!("  - [CREATED]  {}", path),
-                FilePatchResult::Deleted { path } => println!("  - [DELETED]  {}", path),
+                FilePatchResult::Modified { path, .. } => println!("  - [MODIFIED] {path}"),
+                FilePatchResult::Created { path, .. } => println!("  - [CREATED]  {path}"),
+                FilePatchResult::Deleted { path } => println!("  - [DELETED]  {path}"),
             }
         }
     } else {
         if let Err(e) = apply_changes(&all_patch_results) {
-            eprintln!("[ERROR] A failure occurred while writing changes to disk: {}", e);
+            eprintln!(
+                "[ERROR] A failure occurred while writing changes to disk: {e}"
+            );
             eprintln!("The patching process was aborted. Some files may have been changed.");
             std::process::exit(1);
         }

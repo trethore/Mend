@@ -5,17 +5,9 @@ use std::collections::HashMap;
 
 #[derive(Debug)]
 pub enum FilePatchResult {
-    Modified {
-        path: String,
-        new_content: String,
-    },
-    Created {
-        path: String,
-        new_content: String,
-    },
-    Deleted {
-        path: String,
-    },
+    Modified { path: String, new_content: String },
+    Created { path: String, new_content: String },
+    Deleted { path: String },
 }
 
 #[derive(Debug, Clone)]
@@ -49,14 +41,33 @@ impl From<std::io::Error> for PatchError {
 impl std::fmt::Display for PatchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PatchError::HunkApplicationFailed { file_path, hunk_index, reason } => {
-                write!(f, "Failed to apply hunk {} for file {}: {}", hunk_index + 1, file_path, reason)
+            PatchError::HunkApplicationFailed {
+                file_path,
+                hunk_index,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "Failed to apply hunk {} for file {}: {}",
+                    hunk_index + 1,
+                    file_path,
+                    reason
+                )
             }
-            PatchError::AmbiguousMatch { file_path, hunk_index, .. } => {
-                write!(f, "Ambiguous match for hunk {} in file {}", hunk_index + 1, file_path)
+            PatchError::AmbiguousMatch {
+                file_path,
+                hunk_index,
+                ..
+            } => {
+                write!(
+                    f,
+                    "Ambiguous match for hunk {} in file {}",
+                    hunk_index + 1,
+                    file_path
+                )
             }
             PatchError::IOError(e) => {
-                write!(f, "I/O error: {}", e)
+                write!(f, "I/O error: {e}")
             }
         }
     }
@@ -75,20 +86,25 @@ fn apply_proximity_bonus(matches: &mut Vec<HunkMatch>, old_start_line: usize, de
     }
     if debug_mode {
         println!(
-            "[DEBUG]   -> Applying proximity bonus based on original start line: {}",
-            old_start_line
+            "[DEBUG]   -> Applying proximity bonus based on original start line: {old_start_line}"
         );
     }
 
     for m in matches.iter_mut() {
         let distance =
-            (m.start_index as i64 - (old_start_line.saturating_sub(1)) as i64).abs() as usize;
+            (m.start_index as i64 - (old_start_line.saturating_sub(1)) as i64).unsigned_abs() as usize;
         if distance <= MAX_DISTANCE_FOR_BONUS {
             let bonus = MAX_BONUS * (1.0 - distance as f32 / MAX_DISTANCE_FOR_BONUS as f32);
             let old_score = m.score;
             m.score = (m.score + bonus).min(1.0);
             if debug_mode && m.score > old_score {
-                println!("[DEBUG]     - Bonus for match at line {}: score {:.2} -> {:.2} (distance: {})", m.start_index + 1, old_score, m.score, distance);
+                println!(
+                    "[DEBUG]     - Bonus for match at line {}: score {:.2} -> {:.2} (distance: {})",
+                    m.start_index + 1,
+                    old_score,
+                    m.score,
+                    distance
+                );
             }
         }
     }
@@ -100,7 +116,9 @@ fn deduplicate_matches(matches: Vec<HunkMatch>) -> Vec<HunkMatch> {
     }
     let mut best_matches: HashMap<usize, HunkMatch> = HashMap::new();
     for m in matches {
-        let entry = best_matches.entry(m.start_index).or_insert_with(|| m.clone());
+        let entry = best_matches
+            .entry(m.start_index)
+            .or_insert_with(|| m.clone());
 
         if m.score > entry.score {
             *entry = m;
@@ -200,8 +218,13 @@ pub fn find_hunk_location(
 
         let clean_source_lines: Vec<&String> = clean_source_map.iter().map(|(_, s)| s).collect();
 
-        for (clean_start_idx, window) in clean_source_lines.windows(clean_anchor.len()).enumerate() {
-            if window.iter().zip(clean_anchor.iter()).all(|(&s1, s2)| s1 == s2) {
+        for (clean_start_idx, window) in clean_source_lines.windows(clean_anchor.len()).enumerate()
+        {
+            if window
+                .iter()
+                .zip(clean_anchor.iter())
+                .all(|(&s1, s2)| s1 == s2)
+            {
                 let original_start_index = clean_source_map[clean_start_idx].0;
 
                 let clean_end_idx = clean_start_idx + clean_anchor.len() - 1;
@@ -234,15 +257,25 @@ pub fn find_hunk_location(
             println!("[DEBUG]   -> Trying anchor-point heuristic match...");
         }
 
-        let num_additions = hunk.lines.iter().filter(|l| matches!(l, Line::Addition(_))).count();
-        let num_removals = hunk.lines.iter().filter(|l| matches!(l, Line::Removal(_))).count();
+        let num_additions = hunk
+            .lines
+            .iter()
+            .filter(|l| matches!(l, Line::Addition(_)))
+            .count();
+        let num_removals = hunk
+            .lines
+            .iter()
+            .filter(|l| matches!(l, Line::Removal(_)))
+            .count();
         let change_magnitude = num_additions + num_removals;
 
         let adaptive_window = anchor_lines.len() + std::cmp::max(10, 4 * change_magnitude);
         let search_window_size = std::cmp::min(adaptive_window, 400);
 
         if debug_mode {
-            println!("[DEBUG]     - Adaptive search window size: {}", search_window_size);
+            println!(
+                "[DEBUG]     - Adaptive search window size: {search_window_size}"
+            );
         }
 
         let top_anchor_original_line = anchor_lines.first().unwrap();
@@ -251,12 +284,16 @@ pub fn find_hunk_location(
         let top_anchor = clean_anchor.first().unwrap();
         let bottom_anchor = clean_anchor.last().unwrap();
 
-        for (clean_idx, (original_idx_top, normalized_line_top)) in clean_source_map.iter().enumerate() {
+        for (clean_idx, (original_idx_top, normalized_line_top)) in
+            clean_source_map.iter().enumerate()
+        {
             if normalized_line_top == top_anchor {
                 let search_window_end =
                     (*original_idx_top + search_window_size).min(source_lines.len());
 
-                for (_, (original_idx_bottom, normalized_line_bottom)) in clean_source_map.iter().enumerate().skip(clean_idx + 1) {
+                for (_, (original_idx_bottom, normalized_line_bottom)) in
+                    clean_source_map.iter().enumerate().skip(clean_idx + 1)
+                {
                     if *original_idx_bottom >= search_window_end {
                         break;
                     }
@@ -274,8 +311,7 @@ pub fn find_hunk_location(
                             score = (score + 0.01).min(1.0);
                             if debug_mode && score > original_score {
                                 println!(
-                                    "[DEBUG]     - Indentation bonus applied. Score: {:.2} -> {:.2}",
-                                    original_score, score
+                                    "[DEBUG]     - Indentation bonus applied. Score: {original_score:.2} -> {score:.2}"
                                 );
                             }
                         }

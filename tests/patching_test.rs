@@ -85,7 +85,8 @@ fn test_anchor_point_heuristic_succeeds() {
     let expected = "line one\nline two new\nline three";
 
     // ACT: Run with fuzziness level 2.
-    let matches: Vec<HunkMatch> = patcher::find_hunk_location(&original_lines, &hunk, 2, false, 0.7);
+    let matches: Vec<HunkMatch> =
+        patcher::find_hunk_location(&original_lines, &hunk, 2, false, 0.7);
 
     // ASSERT: Check that we found a match using the heuristic.
     assert_eq!(matches.len(), 1);

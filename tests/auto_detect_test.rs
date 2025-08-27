@@ -11,30 +11,35 @@ fn run_parser_test(diff_file_name: &str, expected_old_file: &str, expected_new_f
     let patch = parser::parse_patch(&diff_content).expect("Parsing the patch should succeed.");
 
     // 3. ASSERT
-    assert_eq!(patch.diffs.len(), 1, "Should have parsed exactly one file diff.");
+    assert_eq!(
+        patch.diffs.len(),
+        1,
+        "Should have parsed exactly one file diff."
+    );
     let file_diff = &patch.diffs[0];
 
-    assert_eq!(file_diff.old_file, expected_old_file, "Detected old file path does not match.");
-    assert_eq!(file_diff.new_file, expected_new_file, "Detected new file path does not match.");
-    assert!(!file_diff.hunks.is_empty(), "Parsed diff should contain hunks.");
+    assert_eq!(
+        file_diff.old_file, expected_old_file,
+        "Detected old file path does not match."
+    );
+    assert_eq!(
+        file_diff.new_file, expected_new_file,
+        "Detected new file path does not match."
+    );
+    assert!(
+        !file_diff.hunks.is_empty(),
+        "Parsed diff should contain hunks."
+    );
 }
 
 #[test]
 fn test_parses_git_style_paths() {
-    run_parser_test(
-        "utils_greet.diff",
-        "utils.rs",
-        "utils.rs",
-    );
+    run_parser_test("utils_greet.diff", "utils.rs", "utils.rs");
 }
 
 #[test]
 fn test_parses_custom_style_paths() {
-    run_parser_test(
-        "claude.diff",
-        "Personne.java.old",
-        "Personne.java.new",
-    );
+    run_parser_test("claude.diff", "Personne.java.old", "Personne.java.new");
 }
 
 #[test]
