@@ -25,17 +25,15 @@ struct Report {
 }
 
 impl Report {
-    fn summary(&self, dry_run: bool) -> String {
-        let mut header = String::new();
-        if !dry_run {
-            if self.warnings.is_empty() {
-                header.push_str("✔ Patch applied successfully");
-            } else {
-                header.push_str("✔ Patch applied with warnings");
-            }
+    fn summary(&self, dry_run: bool, revert: bool) -> String {
+        let action = if revert { "reverted" } else { "applied" };
+        let header = if dry_run {
+            "\nSummary".to_string()
+        } else if self.warnings.is_empty() {
+            format!("✔ Patch {action} successfully")
         } else {
-            header.push_str("\nSummary");
-        }
+            format!("✔ Patch {action} with warnings")
+        };
 
         let mut file_parts = Vec::new();
         if self.files_created > 0 {
@@ -54,7 +52,7 @@ impl Report {
         } else {
             "hunks"
         };
-        hunk_parts.push(format!("{} {} applied", self.hunks_applied, hunk_text));
+        hunk_parts.push(format!("{} {} {}", self.hunks_applied, hunk_text, action));
         if self.hunks_skipped > 0 {
             hunk_parts.push(format!("{} skipped", self.hunks_skipped));
         }
@@ -111,6 +109,9 @@ struct Args {
 
     #[arg(short, long, conflicts_with = "diff_file")]
     clipboard: bool,
+
+    #[arg(short, long, default_value_t = false)]
+    revert: bool,
 
     #[arg(long, default_value_t = false)]
     ci: bool,
@@ -515,6 +516,7 @@ fn handle_results(
     results: &[FilePatchResult],
     dry_run: bool,
     silent: bool,
+    revert: bool,
     report: &mut Report,
 ) -> io::Result<()> {
     for result in results {
@@ -541,7 +543,7 @@ fn handle_results(
             apply_changes(results)?;
         }
         if !silent {
-            println!("{}", report.summary(dry_run));
+            println!("{}", report.summary(dry_run, revert));
         }
     } else if !silent {
         println!("No changes were applied.");
@@ -568,6 +570,13 @@ fn main_logic(mut args: Args) -> Result<(), AppError> {
     }
 
     let mut patch = parser::parse_patch(&diff_content)?;
+
+    if args.revert {
+        if is_verbose {
+            println!("[INFO] Inverting patch for revert operation...");
+        }
+        patch = patch.invert();
+    }
 
     if let Some(target_path_str) = &args.target_file {
         let target_path = PathBuf::from(target_path_str);
@@ -604,6 +613,7 @@ fn main_logic(mut args: Args) -> Result<(), AppError> {
         &all_patch_results,
         args.dry_run || args.debug,
         args.silent,
+        args.revert,
         &mut report,
     )?;
 

@@ -103,6 +103,15 @@ To review and confirm every hunk before it is applied, even if it's a perfect ma
 ```bash
 mend --confirm my_changes.diff
 ```
+### Reverting a Patch
+
+To undo a patch that has already been applied, use the `-r` or `--revert` flag. `mend` will invert the diff and use its fuzzy-matching engine to find where the change was applied and revert it.
+
+```bash
+# Revert the changes contained in the diff file
+mend -r my_changes.diff
+```
+
 <!-- ADDITION START -->
 ### Use in Scripts and CI
 
@@ -173,10 +182,9 @@ Do you want to [s]kip this hunk or [a]bort the process? (s/a)
 #### **Options:**
 
 -   `-c, --clipboard`: Read the diff content from the system clipboard.
-<!-- ADDITION START -->
 -   `--ci`: Run in non-interactive "CI" mode. Fails with an error instead of prompting for user input on any ambiguity or failed match.
-<!-- ADDITION END -->
 -   `--confirm`: Require interactive confirmation for every hunk, even perfect matches.
+-   `-r, --revert`: Invert the given diff and apply it, effectively reverting a previously applied patch.
 -   `--dry-run`: Preview all changes without writing to disk.
 -   `--debug`: Enable highly detailed logs for debugging `mend` itself. Implies `--dry-run`.
 -   `--example`: Print an example diff to the console and exit.
