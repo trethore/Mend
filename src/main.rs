@@ -135,6 +135,14 @@ struct Args {
 
     #[arg(short, long)]
     verbose: bool,
+
+    #[arg(
+        short,
+        long,
+        default_value_t = false,
+        conflicts_with_all = &["verbose", "debug", "confirm"]
+    )]
+    silent: bool,
 }
 
 fn read_user_input() -> String {
@@ -192,6 +200,7 @@ struct PatcherOptions {
     debug_mode: bool,
     confirm: bool,
     ci: bool,
+    silent: bool,
     match_threshold: f32,
 }
 
@@ -252,7 +261,7 @@ fn resolve_file_diff_interactively(
                 options.match_threshold,
             );
             if possible_matches.is_empty() {
-                if options.ci {
+                if options.ci || options.silent {
                     return Err(PatchError::HunkApplicationFailed {
                         file_path: new_path.clone(),
                         hunk_index: i,
@@ -280,7 +289,7 @@ fn resolve_file_diff_interactively(
                     continue;
                 }
             } else if possible_matches.len() > 1 {
-                if options.ci {
+                if options.ci || options.silent {
                     return Err(PatchError::AmbiguousMatch {
                         file_path: new_path.clone(),
                         hunk_index: i,
@@ -336,7 +345,7 @@ fn resolve_file_diff_interactively(
                 }
             } else {
                 let chosen_match = &possible_matches[0];
-                if !options.ci && (options.confirm || chosen_match.score < 1.0) {
+                if !options.ci && !options.silent && (options.confirm || chosen_match.score < 1.0) {
                     eprintln!(
                         "[INFO] Found a single match for hunk {} in file {}.",
                         i + 1,
@@ -477,6 +486,7 @@ fn process_patch(
         debug_mode: args.debug,
         confirm: args.confirm,
         ci: args.ci,
+        silent: args.silent,
         match_threshold: args.match_threshold,
     };
 
@@ -504,6 +514,7 @@ fn process_patch(
 fn handle_results(
     results: &[FilePatchResult],
     dry_run: bool,
+    silent: bool,
     report: &mut Report,
 ) -> io::Result<()> {
     for result in results {
@@ -515,12 +526,14 @@ fn handle_results(
     }
 
     if dry_run {
-        println!("\n[DRY RUN] The following changes would be applied:");
-        for result in results {
-            match result {
-                FilePatchResult::Modified { path, .. } => println!("  - [MODIFIED] {path}"),
-                FilePatchResult::Created { path, .. } => println!("  - [CREATED]  {path}"),
-                FilePatchResult::Deleted { path } => println!("  - [DELETED]  {path}"),
+        if !silent {
+            println!("\n[DRY RUN] The following changes would be applied:");
+            for result in results {
+                match result {
+                    FilePatchResult::Modified { path, .. } => println!("  - [MODIFIED] {path}"),
+                    FilePatchResult::Created { path, .. } => println!("  - [CREATED]  {path}"),
+                    FilePatchResult::Deleted { path } => println!("  - [DELETED]  {path}"),
+                }
             }
         }
     }
@@ -529,15 +542,19 @@ fn handle_results(
         if !dry_run {
             apply_changes(results)?;
         }
-        println!("{}", report.summary(dry_run));
+        if !silent {
+            println!("{}", report.summary(dry_run));
+        }
     } else {
-        println!("No changes were applied.");
+        if !silent {
+            println!("No changes were applied.");
+        }
     }
     Ok(())
 }
 
 fn main_logic(mut args: Args) -> Result<(), AppError> {
-    let is_verbose = args.verbose || args.debug;
+    let is_verbose = (args.verbose || args.debug) && !args.silent;
 
     if !args.clipboard && args.target_file.is_some() && args.diff_file.is_none() {
         args.diff_file = args.target_file.take();
@@ -587,7 +604,12 @@ fn main_logic(mut args: Args) -> Result<(), AppError> {
     let mut report = Report::default();
     let all_patch_results = process_patch(&patch, &args, &mut report)?;
 
-    handle_results(&all_patch_results, args.dry_run || args.debug, &mut report)?;
+    handle_results(
+        &all_patch_results,
+        args.dry_run || args.debug,
+        args.silent,
+        &mut report,
+    )?;
 
     if is_verbose {
         println!("----------------------------");

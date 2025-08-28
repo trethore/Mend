@@ -109,8 +109,15 @@ mend --confirm my_changes.diff
 For automated environments, prevent `mend` from prompting for input by using the `--ci` flag. If any hunk cannot be applied cleanly (due to an error or ambiguity), `mend` will exit with an error instead of asking for help.
 
 ```bash
-# This will succeed or fail silently without user interaction
+# This will apply the patch non-interactively, printing a summary on success.
 cat my_changes.diff | mend --ci
+```
+
+To suppress the summary on success for truly silent operation, add the `--silent` flag. This is useful for scripting where you only care about the exit code and any potential error output.
+
+```bash
+# This will succeed silently, or fail with an error message to stderr.
+cat my_changes.diff | mend --ci --silent
 ```
 <!-- ADDITION END -->
 ### Show an Example
@@ -173,6 +180,7 @@ Do you want to [s]kip this hunk or [a]bort the process? (s/a)
 -   `--dry-run`: Preview all changes without writing to disk.
 -   `--debug`: Enable highly detailed logs for debugging `mend` itself. Implies `--dry-run`.
 -   `--example`: Print an example diff to the console and exit.
+-   `-s, --silent`: Suppress all output on success. Errors are still printed to stderr. Conflicts with `--verbose`, `--debug`, and `--confirm`.
 -   `-v, --verbose`: Enable verbose logging to see which files and hunks are being processed.
 -   `-f, --fuzziness <LEVEL>`: Manually set the matching strategy. Default: `2`.
     -   `0`: Strict mode only (exact match).
