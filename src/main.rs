@@ -26,38 +26,57 @@ struct Report {
 
 impl Report {
     fn summary(&self, dry_run: bool) -> String {
-        let mut s = String::new();
+        let mut header = String::new();
         if !dry_run {
             if self.warnings.is_empty() {
-                s.push_str("✔ Patch applied successfully.\n");
+                header.push_str("✔ Patch applied successfully");
             } else {
-                s.push_str("✔ Patch applied with warnings.\n");
+                header.push_str("✔ Patch applied with warnings");
             }
+        } else {
+            header.push_str("\nSummary");
         }
 
-        s.push_str("\n--- Summary ---\n");
+        let mut file_parts = Vec::new();
         if self.files_created > 0 {
-            s.push_str(&format!("Files created:  {}\n", self.files_created));
+            file_parts.push(format!("{} created", self.files_created));
         }
         if self.files_modified > 0 {
-            s.push_str(&format!("Files modified: {}\n", self.files_modified));
+            file_parts.push(format!("{} modified", self.files_modified));
         }
         if self.files_deleted > 0 {
-            s.push_str(&format!("Files deleted:  {}\n", self.files_deleted));
-        }
-        s.push_str(&format!("Hunks applied:  {}\n", self.hunks_applied));
-        if self.hunks_skipped > 0 {
-            s.push_str(&format!("Hunks skipped:  {}\n", self.hunks_skipped));
+            file_parts.push(format!("{} deleted", self.files_deleted));
         }
 
+        let mut hunk_parts = Vec::new();
+        let hunk_text = if self.hunks_applied == 1 {
+            "hunk"
+        } else {
+            "hunks"
+        };
+        hunk_parts.push(format!("{} {} applied", self.hunks_applied, hunk_text));
+        if self.hunks_skipped > 0 {
+            hunk_parts.push(format!("{} skipped", self.hunks_skipped));
+        }
+
+        let mut summary_parts = Vec::new();
+        if !file_parts.is_empty() {
+            summary_parts.push(file_parts.join(", "));
+        }
+        summary_parts.push(hunk_parts.join(", "));
+
+        let summary_line = summary_parts.join(" | ");
+
+        let mut final_string = format!("{header}: {summary_line}");
+
         if !self.warnings.is_empty() {
-            s.push_str("\n--- Warnings ---\n");
+            final_string.push_str("\n\n--- Warnings ---");
             for warning in &self.warnings {
-                s.push_str(&format!("- {warning}\n"));
+                final_string.push_str(&format!("\n- {warning}"));
             }
         }
 
-        s
+        final_string
     }
 }
 
@@ -473,12 +492,9 @@ fn process_patch(
                 args.target_file.as_deref().unwrap_or(&file_diff.new_file)
             );
         }
-        if let Some(result) = resolve_file_diff_interactively(
-            file_diff,
-            &args.target_file,
-            &options,
-            report,
-        )? {
+        if let Some(result) =
+            resolve_file_diff_interactively(file_diff, &args.target_file, &options, report)?
+        {
             all_patch_results.push(result);
         }
     }
