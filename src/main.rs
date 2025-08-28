@@ -525,15 +525,13 @@ fn handle_results(
         }
     }
 
-    if dry_run {
-        if !silent {
-            println!("\n[DRY RUN] The following changes would be applied:");
-            for result in results {
-                match result {
-                    FilePatchResult::Modified { path, .. } => println!("  - [MODIFIED] {path}"),
-                    FilePatchResult::Created { path, .. } => println!("  - [CREATED]  {path}"),
-                    FilePatchResult::Deleted { path } => println!("  - [DELETED]  {path}"),
-                }
+    if dry_run && !silent {
+        println!("\n[DRY RUN] The following changes would be applied:");
+        for result in results {
+            match result {
+                FilePatchResult::Modified { path, .. } => println!("  - [MODIFIED] {path}"),
+                FilePatchResult::Created { path, .. } => println!("  - [CREATED]  {path}"),
+                FilePatchResult::Deleted { path } => println!("  - [DELETED]  {path}"),
             }
         }
     }
@@ -545,10 +543,8 @@ fn handle_results(
         if !silent {
             println!("{}", report.summary(dry_run));
         }
-    } else {
-        if !silent {
-            println!("No changes were applied.");
-        }
+    } else if !silent {
+        println!("No changes were applied.");
     }
     Ok(())
 }
