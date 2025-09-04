@@ -3,6 +3,7 @@ use lcs::LcsTable;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::error::Error;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub enum FilePatchResult {
@@ -158,11 +159,13 @@ fn find_best_anchor_in_slice<'a>(slice: &[&'a String]) -> Option<&'a String> {
 pub fn find_hunk_location(
     source_lines: &[String],
     clean_source_map: &[(usize, String)],
+    clean_index_map: &HashMap<String, Vec<usize>>,
     hunk: &Hunk,
     fuzziness: u8,
     debug_mode: bool,
     match_threshold: f32,
 ) -> Vec<HunkMatch> {
+    let total_start = if debug_mode { Some(Instant::now()) } else { None };
     let anchor_lines: Vec<&String> = hunk
         .lines
         .iter()
@@ -187,6 +190,7 @@ pub fn find_hunk_location(
     if debug_mode {
         println!("[DEBUG]   -> Trying strict match...");
     }
+    let strict_start = if debug_mode { Some(Instant::now()) } else { None };
     if let Some(start_index) = source_lines
         .windows(anchor_lines.len())
         .position(|window| window.iter().zip(anchor_lines.iter()).all(|(s, a)| s == *a))
@@ -197,7 +201,23 @@ pub fn find_hunk_location(
             score: 1.0,
             density: 1.0,
         });
+        if let Some(s) = strict_start {
+            if debug_mode {
+                println!(
+                    "[DEBUG]   -> Strict: 1 match in {}ms",
+                    s.elapsed().as_millis()
+                );
+            }
+        }
         return matches;
+    }
+    if let Some(s) = strict_start {
+        if debug_mode {
+            println!(
+                "[DEBUG]   -> Strict: 0 matches in {}ms",
+                s.elapsed().as_millis()
+            );
+        }
     }
 
     if fuzziness == 0 {
@@ -218,6 +238,7 @@ pub fn find_hunk_location(
         if debug_mode {
             println!("[DEBUG]   -> Trying whitespace-insensitive match...");
         }
+        let ws_start = if debug_mode { Some(Instant::now()) } else { None };
 
         let clean_source_lines: Vec<&String> = clean_source_map.iter().map(|(_, s)| s).collect();
 
@@ -251,7 +272,25 @@ pub fn find_hunk_location(
 
         if !matches.is_empty() {
             apply_proximity_bonus(&mut matches, hunk.old_start, debug_mode);
-            return deduplicate_matches(matches);
+            let deduped = deduplicate_matches(matches);
+            if let Some(s) = ws_start {
+                if debug_mode {
+                    println!(
+                        "[DEBUG]   -> Whitespace-insensitive: {} match(es) in {}ms",
+                        deduped.len(),
+                        s.elapsed().as_millis()
+                    );
+                }
+            }
+            return deduped;
+        }
+        if let Some(s) = ws_start {
+            if debug_mode {
+                println!(
+                    "[DEBUG]   -> Whitespace-insensitive: 0 matches in {}ms",
+                    s.elapsed().as_millis()
+                );
+            }
         }
     }
 
@@ -259,6 +298,7 @@ pub fn find_hunk_location(
         if debug_mode {
             println!("[DEBUG]   -> Trying anchor-point heuristic match...");
         }
+        let anchor_start = if debug_mode { Some(Instant::now()) } else { None };
 
         let num_additions = hunk
             .lines
@@ -302,35 +342,42 @@ pub fn find_hunk_location(
         let top_anchor = normalize_line(top_anchor_original);
         let bottom_anchor = normalize_line(bottom_anchor_original);
 
-        for (clean_idx, (original_idx_top, normalized_line_top)) in
-            clean_source_map.iter().enumerate()
-        {
-            if normalized_line_top == &top_anchor {
-                let search_window_end =
-                    (*original_idx_top + search_window_size).min(source_lines.len());
+        if let Some(top_positions) = clean_index_map.get(&top_anchor) {
+            if let Some(bottom_positions) = clean_index_map.get(&bottom_anchor) {
+                let mut candidates_considered: usize = 0;
+                for &original_idx_top in top_positions {
+                    let search_window_end =
+                        (original_idx_top + search_window_size).min(source_lines.len());
 
-                for (_, (original_idx_bottom, normalized_line_bottom)) in
-                    clean_source_map.iter().enumerate().skip(clean_idx + 1)
-                {
-                    if *original_idx_bottom >= search_window_end {
-                        break;
-                    }
+                    for &original_idx_bottom in bottom_positions {
+                        if original_idx_bottom <= original_idx_top {
+                            continue;
+                        }
+                        if original_idx_bottom >= search_window_end {
+                            break;
+                        }
 
-                    if normalized_line_bottom == &bottom_anchor {
-                        let start_index = *original_idx_top;
-                        let length = *original_idx_bottom - start_index + 1;
-                        let candidate_block = &source_lines[start_index..=*original_idx_bottom];
+                        candidates_considered += 1;
+                        let start_index = original_idx_top;
+                        let length = original_idx_bottom - start_index + 1;
 
-                        let lcs_score = calculate_match_score(&clean_anchor, candidate_block);
-                        let density = if length > 0 {
+                        let max_density = if length > 0 {
                             clean_anchor.len() as f32 / length as f32
                         } else {
                             1.0
                         };
+                        let upper_bound = (0.7 * 1.0) + (0.3 * max_density);
+                        if upper_bound < match_threshold {
+                            continue;
+                        }
+
+                        let candidate_block = &source_lines[start_index..=original_idx_bottom];
+                        let lcs_score = calculate_match_score(&clean_anchor, candidate_block);
+                        let density = max_density;
 
                         let mut score = (0.7 * lcs_score) + (0.3 * density);
 
-                        let candidate_top_anchor_line = &source_lines[*original_idx_top];
+                        let candidate_top_anchor_line = &source_lines[original_idx_top];
                         let candidate_indent = get_indentation(candidate_top_anchor_line);
                         if top_anchor_indent == candidate_indent {
                             let original_score = score;
@@ -346,7 +393,7 @@ pub fn find_hunk_location(
                             println!(
                                 "[DEBUG]     - Candidate at lines {}-{} scored {:.2} (LCS: {:.2}, Density: {:.2})",
                                 start_index + 1,
-                                *original_idx_bottom + 1,
+                                original_idx_bottom + 1,
                                 score,
                                 lcs_score,
                                 density
@@ -363,12 +410,32 @@ pub fn find_hunk_location(
                         }
                     }
                 }
+                if let Some(s) = anchor_start {
+                    if debug_mode {
+                        println!(
+                            "[DEBUG]   -> Anchor heuristic: {} candidate pairs, {} kept, in {}ms",
+                            candidates_considered,
+                            matches.len(),
+                            s.elapsed().as_millis()
+                        );
+                    }
+                }
             }
         }
     }
 
     apply_proximity_bonus(&mut matches, hunk.old_start, debug_mode);
-    deduplicate_matches(matches)
+    let deduped = deduplicate_matches(matches);
+    if let Some(s) = total_start {
+        if debug_mode {
+            println!(
+                "[DEBUG]   -> Total matching: {} final match(es) in {}ms",
+                deduped.len(),
+                s.elapsed().as_millis()
+            );
+        }
+    }
+    deduped
 }
 
 fn calculate_match_score(clean_anchor: &[String], candidate_block: &[String]) -> f32 {

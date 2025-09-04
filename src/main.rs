@@ -11,6 +11,7 @@ use mend::diff::{FileDiff, Patch};
 use mend::parser;
 use mend::patcher::{self, FilePatchResult, PatchError};
 use std::{fs, process};
+use std::time::Instant;
 
 const EXAMPLE_DIFF: &str = include_str!("../resources/example.diff");
 
@@ -22,17 +23,22 @@ struct Report {
     hunks_applied: usize,
     hunks_skipped: usize,
     warnings: Vec<String>,
+    elapsed_ms: Option<u128>,
 }
 
 impl Report {
     fn summary(&self, dry_run: bool, revert: bool) -> String {
         let action = if revert { "reverted" } else { "applied" };
+        let time_str = self
+            .elapsed_ms
+            .map(|ms| if ms < 1000 { format!(" in {ms}ms") } else { format!(" in {:.2}s", (ms as f64) / 1000.0) })
+            .unwrap_or_default();
         let header = if dry_run {
-            "\nSummary".to_string()
+            format!("\nSummary{time_str}")
         } else if self.warnings.is_empty() {
-            format!("✔ Patch {action} successfully")
+            format!("✔ Patch {action} successfully{time_str}")
         } else {
-            format!("✔ Patch {action} with warnings")
+            format!("✔ Patch {action} with warnings{time_str}")
         };
 
         let mut file_parts = Vec::new();
@@ -251,11 +257,17 @@ fn resolve_file_diff_interactively(
         .map(|(i, s)| (i, patcher::normalize_line(s)))
         .filter(|(_, s)| !s.is_empty())
         .collect();
+    let mut clean_index_map: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (idx, norm) in &clean_source_map {
+        clean_index_map.entry(norm.clone()).or_default().push(*idx);
+    }
     for (i, hunk) in file_diff.hunks.iter().enumerate().rev() {
         loop {
             let possible_matches = patcher::find_hunk_location(
                 &source_lines,
                 &clean_source_map,
+                &clean_index_map,
                 hunk,
                 options.fuzziness,
                 options.debug_mode,
@@ -518,6 +530,7 @@ fn handle_results(
     silent: bool,
     revert: bool,
     report: &mut Report,
+    start_instant: Instant,
 ) -> io::Result<()> {
     for result in results {
         match result {
@@ -542,6 +555,7 @@ fn handle_results(
         if !dry_run {
             apply_changes(results)?;
         }
+        report.elapsed_ms = Some(start_instant.elapsed().as_millis());
         if !silent {
             println!("{}", report.summary(dry_run, revert));
         }
@@ -607,6 +621,7 @@ fn main_logic(mut args: Args) -> Result<(), AppError> {
     }
 
     let mut report = Report::default();
+    let overall_start = Instant::now();
     let all_patch_results = process_patch(&patch, &args, &mut report)?;
 
     handle_results(
@@ -615,6 +630,7 @@ fn main_logic(mut args: Args) -> Result<(), AppError> {
         args.silent,
         args.revert,
         &mut report,
+        overall_start,
     )?;
 
     if is_verbose {
