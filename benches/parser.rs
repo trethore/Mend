@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, black_box};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use std::fs;
 
 fn bench_parse(c: &mut Criterion) {
@@ -34,4 +34,3 @@ fn bench_parse(c: &mut Criterion) {
 
 criterion_group!(benches, bench_parse);
 criterion_main!(benches);
-

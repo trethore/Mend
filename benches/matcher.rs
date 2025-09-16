@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, black_box};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use std::fs;
 
 fn load_fixture() -> (Vec<String>, mend::diff::Patch) {
@@ -80,4 +80,3 @@ fn bench_matcher(c: &mut Criterion) {
 
 criterion_group!(benches, bench_matcher);
 criterion_main!(benches);
-

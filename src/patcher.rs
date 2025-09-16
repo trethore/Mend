@@ -165,7 +165,11 @@ pub fn find_hunk_location(
     debug_mode: bool,
     match_threshold: f32,
 ) -> Vec<HunkMatch> {
-    let total_start = if debug_mode { Some(Instant::now()) } else { None };
+    let total_start = if debug_mode {
+        Some(Instant::now())
+    } else {
+        None
+    };
     let anchor_lines: Vec<&String> = hunk
         .lines
         .iter()
@@ -190,7 +194,11 @@ pub fn find_hunk_location(
     if debug_mode {
         println!("[DEBUG]   -> Trying strict match...");
     }
-    let strict_start = if debug_mode { Some(Instant::now()) } else { None };
+    let strict_start = if debug_mode {
+        Some(Instant::now())
+    } else {
+        None
+    };
     if let Some(start_index) = source_lines
         .windows(anchor_lines.len())
         .position(|window| window.iter().zip(anchor_lines.iter()).all(|(s, a)| s == *a))
@@ -238,7 +246,11 @@ pub fn find_hunk_location(
         if debug_mode {
             println!("[DEBUG]   -> Trying whitespace-insensitive match...");
         }
-        let ws_start = if debug_mode { Some(Instant::now()) } else { None };
+        let ws_start = if debug_mode {
+            Some(Instant::now())
+        } else {
+            None
+        };
 
         let clean_source_lines: Vec<&String> = clean_source_map.iter().map(|(_, s)| s).collect();
 
@@ -298,7 +310,11 @@ pub fn find_hunk_location(
         if debug_mode {
             println!("[DEBUG]   -> Trying anchor-point heuristic match...");
         }
-        let anchor_start = if debug_mode { Some(Instant::now()) } else { None };
+        let anchor_start = if debug_mode {
+            Some(Instant::now())
+        } else {
+            None
+        };
 
         let num_additions = hunk
             .lines

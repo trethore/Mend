@@ -10,8 +10,8 @@ use mend::error::AppError;
 use mend::diff::{FileDiff, Patch};
 use mend::parser;
 use mend::patcher::{self, FilePatchResult, PatchError};
-use std::{fs, process};
 use std::time::Instant;
+use std::{fs, process};
 
 const EXAMPLE_DIFF: &str = include_str!("../resources/example.diff");
 
@@ -31,7 +31,13 @@ impl Report {
         let action = if revert { "reverted" } else { "applied" };
         let time_str = self
             .elapsed_ms
-            .map(|ms| if ms < 1000 { format!(" in {ms}ms") } else { format!(" in {:.2}s", (ms as f64) / 1000.0) })
+            .map(|ms| {
+                if ms < 1000 {
+                    format!(" in {ms}ms")
+                } else {
+                    format!(" in {:.2}s", (ms as f64) / 1000.0)
+                }
+            })
             .unwrap_or_default();
         let header = if dry_run {
             format!("\nSummary{time_str}")

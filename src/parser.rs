@@ -1,5 +1,6 @@
 use crate::diff::{FileDiff, Hunk, Line, Patch};
 use regex::Regex;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -18,9 +19,15 @@ impl std::fmt::Display for ParseError {
     }
 }
 
+fn hunk_header_regex() -> &'static Regex {
+    static HUNK_HEADER_RE: OnceLock<Regex> = OnceLock::new();
+    HUNK_HEADER_RE.get_or_init(|| {
+        Regex::new(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").expect("Invalid regex")
+    })
+}
+
 pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
-    let hunk_header_re =
-        Regex::new(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").expect("Invalid regex");
+    let hunk_header_re = hunk_header_regex();
     let mut patch = Patch::default();
     let mut current_file_diff: Option<FileDiff> = None;
 
