@@ -232,9 +232,9 @@ pub fn find_hunk_location(
         return matches;
     }
 
-    let clean_anchor: Vec<String> = anchor_lines
+    let clean_anchor: Vec<&str> = anchor_lines
         .iter()
-        .map(|s| normalize_line(s))
+        .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
 
@@ -252,15 +252,12 @@ pub fn find_hunk_location(
             None
         };
 
-        let clean_source_lines: Vec<&String> = clean_source_map.iter().map(|(_, s)| s).collect();
+        let clean_source_lines: Vec<&str> =
+            clean_source_map.iter().map(|(_, s)| s.as_str()).collect();
 
         for (clean_start_idx, window) in clean_source_lines.windows(clean_anchor.len()).enumerate()
         {
-            if window
-                .iter()
-                .zip(clean_anchor.iter())
-                .all(|(&s1, s2)| s1 == s2)
-            {
+            if window == clean_anchor.as_slice() {
                 let original_start_index = clean_source_map[clean_start_idx].0;
 
                 let clean_end_idx = clean_start_idx + clean_anchor.len() - 1;
@@ -355,11 +352,11 @@ pub fn find_hunk_location(
         };
 
         let top_anchor_indent = get_indentation(top_anchor_original);
-        let top_anchor = normalize_line(top_anchor_original);
-        let bottom_anchor = normalize_line(bottom_anchor_original);
+        let top_anchor = top_anchor_original.trim();
+        let bottom_anchor = bottom_anchor_original.trim();
 
-        if let Some(top_positions) = clean_index_map.get(&top_anchor) {
-            if let Some(bottom_positions) = clean_index_map.get(&bottom_anchor) {
+        if let Some(top_positions) = clean_index_map.get(top_anchor) {
+            if let Some(bottom_positions) = clean_index_map.get(bottom_anchor) {
                 let mut candidates_considered: usize = 0;
                 for &original_idx_top in top_positions {
                     let search_window_end =
@@ -454,14 +451,14 @@ pub fn find_hunk_location(
     deduped
 }
 
-fn calculate_match_score(clean_anchor: &[String], candidate_block: &[String]) -> f32 {
+fn calculate_match_score(clean_anchor: &[&str], candidate_block: &[String]) -> f32 {
     if clean_anchor.is_empty() {
         return 1.0;
     }
 
-    let normalized_candidate: Vec<String> = candidate_block
+    let normalized_candidate: Vec<&str> = candidate_block
         .iter()
-        .map(|s| normalize_line(s))
+        .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
 

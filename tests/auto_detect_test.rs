@@ -4,7 +4,7 @@ use std::path::Path;
 
 fn run_parser_test(diff_file_name: &str, expected_old_file: &str, expected_new_file: &str) {
     // 1. ARRANGE
-    let diff_content = fs::read_to_string(Path::new("test/fixtures/diffs").join(diff_file_name))
+    let diff_content = fs::read_to_string(Path::new("tests/fixtures/diffs").join(diff_file_name))
         .expect("Failed to read diff file");
 
     // 2. ACT
