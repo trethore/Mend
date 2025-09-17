@@ -61,7 +61,33 @@ mend my_changes.diff
 
 You can also specify the original file explicitly, which is useful if the diff has no headers or the patch contains changes for multiple files.
 ```bash
-mend path/to/original_file path/to/diff_file
+# Apply diff contents in 'my_changes.diff' to the file 'path/to/original_file'
+mend path/to/original_file my_changes.diff
+```
+
+### Positional Arg Rules & Examples
+
+- Single positional argument: interpreted as the diff file (`mend my_changes.diff`).
+- Two positional arguments: first is target file, second is diff file (`mend <TARGET_FILE> <DIFF_FILE>`).
+- If you provide exactly one positional argument but also use `-c/--clipboard`, that argument is treated as the target file.
+
+Examples:
+
+```bash
+# Apply a diff file (auto-detect target from diff headers)
+mend my_changes.diff
+
+# Apply a diff file to a specific target file (ignore headers)
+mend src/main.rs my_changes.diff
+
+# Pipe a diff from git and auto-detect target files
+git diff | mend
+
+# Pipe a diff from git into a specific target file
+git diff | mend src/main.rs
+
+# Use clipboard as diff source and target (explicit)
+mend -c src/lib.rs
 ```
 
 ### Piping from Stdin
@@ -103,6 +129,7 @@ To review and confirm every hunk before it is applied, even if it's a perfect ma
 ```bash
 mend --confirm my_changes.diff
 ```
+
 ### Reverting a Patch
 
 To undo a patch that has already been applied, use the `-r` or `--revert` flag. `mend` will invert the diff and use its fuzzy-matching engine to find where the change was applied and revert it.
@@ -115,20 +142,27 @@ mend -r my_changes.diff
 <!-- ADDITION START -->
 ### Use in Scripts and CI
 
-For automated environments, prevent `mend` from prompting for input by using the `--ci` flag. If any hunk cannot be applied cleanly (due to an error or ambiguity), `mend` will exit with an error instead of asking for help.
+`--ci` (CI mode): run `mend` non-interactively. In this mode, any ambiguous or failed hunk will cause `mend` to exit with a non-zero status rather than prompting for input. Use `--ci` when running in automated pipelines.
+
+`--silent`: suppresses success output and makes the run quieter. When combined with `--ci`, `--silent` will cause `mend` to only emit errors on failure (no summary on success). Note: `--silent` conflicts with `--verbose`, `--debug`, and `--confirm` and will make ambiguous/failed hunks error rather than prompting.
+
+`--debug`: enables detailed debug logging. `--debug` is primarily for troubleshooting; it implies `--dry-run` in output handling (debug runs do not write changes unless you remove `--dry-run`), but it remains interactive (it will still prompt for confirmations) unless you explicitly add `--ci` or `--silent`.
+
+Examples:
 
 ```bash
-# This will apply the patch non-interactively, printing a summary on success.
+# Non-interactive CI-friendly run (errors on ambiguity)
 cat my_changes.diff | mend --ci
-```
 
-To suppress the summary on success for truly silent operation, add the `--silent` flag. This is useful for scripting where you only care about the exit code and any potential error output.
-
-```bash
-# This will succeed silently, or fail with an error message to stderr.
+# Non-interactive and quiet (exit code indicates success/failure)
 cat my_changes.diff | mend --ci --silent
+
+# Run with detailed debug logs (useful for troubleshooting). Note: debug prints a lot of information and keeps interactive prompts unless used with --ci.
+mend --debug my_changes.diff
 ```
+
 <!-- ADDITION END -->
+
 ### Show an Example
 
 To see a sample diff file that `mend` understands, use the `--example` flag.
@@ -179,22 +213,24 @@ Do you want to [s]kip this hunk or [a]bort the process? (s/a)
 -   `[TARGET_FILE]`: (Optional) The path to the file to be patched. If provided, `mend` will only apply hunks from the diff that match this file. If omitted, it will process all files from the diff headers.
 -   `[DIFF_FILE]`: (Optional) The path to the diff/patch file. If omitted, `mend` reads from standard input.
 
-#### **Options:**
+#### **Options (quick reference):**
 
 -   `-c, --clipboard`: Read the diff content from the system clipboard.
--   `--ci`: Run in non-interactive "CI" mode. Fails with an error instead of prompting for user input on any ambiguity or failed match.
+-   `--ci`: Run in non-interactive "CI" mode. Any ambiguous or failed hunk causes an error (non-zero exit) instead of prompting.
 -   `--confirm`: Require interactive confirmation for every hunk, even perfect matches.
--   `-r, --revert`: Invert the given diff and apply it, effectively reverting a previously applied patch.
+-   `-r, --revert`: Invert the given diff and apply it (useful to undo a previous patch).
 -   `--dry-run`: Preview all changes without writing to disk.
--   `--debug`: Enable highly detailed logs for debugging `mend` itself. Implies `--dry-run`.
+-   `--debug`: Enable detailed debug logs. Debug enables verbose internal logs and is intended for troubleshooting; it keeps the run interactive unless `--ci` or `--silent` is also used.
 -   `--example`: Print an example diff to the console and exit.
--   `-s, --silent`: Suppress all output on success. Errors are still printed to stderr. Conflicts with `--verbose`, `--debug`, and `--confirm`.
+-   `-s, --silent`: Suppress success output (prints nothing on success). In interactive contexts, `--silent` will also cause ambiguous/failed hunks to error rather than prompt. Conflicts with `--verbose`, `--debug`, and `--confirm`.
 -   `-v, --verbose`: Enable verbose logging to see which files and hunks are being processed.
 -   `-f, --fuzziness <LEVEL>`: Manually set the matching strategy. Default: `2`.
     -   `0`: Strict mode only (exact match).
     -   `1`: Allows whitespace and empty line differences.
     -   `2`: Enables all strategies, including the anchor-point heuristic.
 -   `-m, --match-threshold <SCORE>`: Sets the minimum score (from `0.0` to `1.0`) required for a match when using the Level 2 heuristic. Default: `0.7`.
+
+For automation, prefer `--ci` (make runs non-interactive). Add `--silent` for quiet CI runs where only exit codes and stderr matter.
 
 ## How It Works
 
