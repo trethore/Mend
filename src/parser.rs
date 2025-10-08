@@ -1,6 +1,5 @@
 use crate::diff::{FileDiff, Hunk, Line, Patch};
 use regex::Regex;
-use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -19,15 +18,84 @@ impl std::fmt::Display for ParseError {
     }
 }
 
-fn hunk_header_regex() -> &'static Regex {
-    static HUNK_HEADER_RE: OnceLock<Regex> = OnceLock::new();
-    HUNK_HEADER_RE.get_or_init(|| {
-        Regex::new(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").expect("Invalid regex")
-    })
+fn sanitize_diff(input: &str) -> String {
+    let mut lines: Vec<&str> = input.lines().collect();
+
+    let start_fence_patterns = ["```diff", "```patch", "```"];
+    let mut start_idx = 0;
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if start_fence_patterns.iter().any(|pattern| trimmed == *pattern) {
+            start_idx = i + 1;
+            break;
+        }
+    }
+
+    let mut end_idx = lines.len();
+    if start_idx > 0 {
+        for i in (start_idx..lines.len()).rev() {
+            if lines[i].trim() == "```" {
+                end_idx = i;
+                break;
+            }
+        }
+    }
+
+    if start_idx > 0 && end_idx > start_idx {
+        lines = lines[start_idx..end_idx].to_vec();
+    }
+
+    let diff_indicators = ["---", "+++", "@@", "diff --git"];
+    let mut result = Vec::new();
+    let mut in_hunk = false;
+    let mut found_any_diff_marker = false;
+
+    for line in lines {
+        let trimmed = line.trim();
+
+        if diff_indicators.iter().any(|marker| trimmed.starts_with(marker)) {
+            found_any_diff_marker = true;
+            result.push(line.to_string());
+            if trimmed.starts_with("@@") {
+                in_hunk = true;
+            }
+            continue;
+        }
+
+        if in_hunk {
+            if !line.is_empty() && !line.starts_with('+') && !line.starts_with('-') && !line.starts_with(' ') {
+                if line.chars().next().map_or(false, |c| c.is_whitespace()) {
+                    result.push(line.to_string());
+                } else if trimmed.is_empty() {
+                    result.push(String::new());
+                } else {
+                    result.push(format!(" {}", line));
+                }
+            } else {
+                result.push(line.to_string());
+            }
+        } else if found_any_diff_marker {
+            if line.starts_with('+') || line.starts_with('-') || line.starts_with(' ')
+                || trimmed.starts_with("index ")
+                || trimmed.starts_with("new file mode")
+                || trimmed.starts_with("deleted file mode")
+                || trimmed.starts_with("Binary files")
+                || trimmed.starts_with("similarity index")
+                || trimmed.starts_with("rename from")
+                || trimmed.starts_with("rename to")
+                || trimmed.starts_with("\\") {
+                result.push(line.to_string());
+            }
+        }
+    }
+
+    result.join("\n")
 }
 
 pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
-    let hunk_header_re = hunk_header_regex();
+    let sanitized = sanitize_diff(patch_content);
+    let hunk_header_re =
+        Regex::new(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").expect("Invalid regex");
     let mut patch = Patch::default();
     let mut current_file_diff: Option<FileDiff> = None;
 
@@ -42,7 +110,7 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
         }
     };
 
-    for (line_number, raw_line) in patch_content.lines().enumerate() {
+    for (line_number, raw_line) in sanitized.lines().enumerate() {
         let line = raw_line;
 
         if line.starts_with("diff --git ") {
