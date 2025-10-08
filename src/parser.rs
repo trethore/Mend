@@ -1,6 +1,5 @@
 use crate::diff::{FileDiff, Hunk, Line, Patch};
 use regex::Regex;
-use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -19,15 +18,118 @@ impl std::fmt::Display for ParseError {
     }
 }
 
-fn hunk_header_regex() -> &'static Regex {
-    static HUNK_HEADER_RE: OnceLock<Regex> = OnceLock::new();
-    HUNK_HEADER_RE.get_or_init(|| {
-        Regex::new(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").expect("Invalid regex")
-    })
+fn strip_markdown_fences(input: &str) -> Vec<&str> {
+    let lines: Vec<&str> = input.lines().collect();
+    let start_fence_patterns = ["```diff", "```patch", "```"];
+
+    let start_idx = lines
+        .iter()
+        .position(|line| start_fence_patterns.contains(&line.trim()));
+
+    if let Some(start) = start_idx {
+        let start_idx = start + 1;
+        let end_idx = lines[start_idx..]
+            .iter()
+            .position(|line| line.trim() == "```")
+            .map(|pos| start_idx + pos)
+            .unwrap_or(lines.len());
+
+        lines[start_idx..end_idx].to_vec()
+    } else {
+        lines
+    }
+}
+
+fn sanitize_diff(input: &str) -> String {
+    let lines = strip_markdown_fences(input);
+
+    let diff_indicators = ["---", "+++", "@@", "diff --git"];
+    let mut result = Vec::new();
+    let mut in_hunk = false;
+    let mut found_any_diff_marker = false;
+
+    for line in lines {
+        let trimmed = line.trim();
+
+        if diff_indicators
+            .iter()
+            .any(|marker| trimmed.starts_with(marker))
+        {
+            found_any_diff_marker = true;
+            result.push(line.to_string());
+            if trimmed.starts_with("@@") {
+                in_hunk = true;
+            }
+            continue;
+        }
+
+        if in_hunk {
+            if !line.is_empty()
+                && !line.starts_with('+')
+                && !line.starts_with('-')
+                && !line.starts_with(' ')
+            {
+                if line.chars().next().is_some_and(|c| c.is_whitespace()) {
+                    result.push(line.to_string());
+                } else if trimmed.is_empty() {
+                    result.push(String::new());
+                } else {
+                    result.push(format!(" {line}"));
+                }
+            } else {
+                result.push(line.to_string());
+            }
+        } else if found_any_diff_marker
+            && (line.starts_with('+')
+                || line.starts_with('-')
+                || line.starts_with(' ')
+                || is_git_metadata(trimmed))
+        {
+            result.push(line.to_string());
+        }
+    }
+
+    result.join("\n")
+}
+
+const GIT_METADATA_PREFIXES: &[&str] = &[
+    "index ",
+    "new file mode ",
+    "deleted file mode ",
+    "similarity index ",
+    "rename from ",
+    "rename to ",
+    "Binary files ",
+    "\\ No newline at end of file",
+];
+
+fn is_git_metadata(line: &str) -> bool {
+    GIT_METADATA_PREFIXES
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+}
+
+fn parse_diff_path(stripped: &str, prefix: &str) -> String {
+    let path_part = stripped.trim();
+    let path_candidate = if path_part.contains(char::is_whitespace) {
+        path_part.split_whitespace().last().unwrap_or(path_part)
+    } else {
+        path_part
+    };
+    let final_path = path_candidate
+        .strip_prefix(prefix)
+        .unwrap_or(path_candidate);
+    if final_path == "/dev/null" || final_path == "dev/null" {
+        "/dev/null".to_string()
+    } else {
+        final_path.to_string()
+    }
 }
 
 pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
-    let hunk_header_re = hunk_header_regex();
+    let sanitized = sanitize_diff(patch_content);
+    let hunk_header_re =
+        Regex::new(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").expect("Invalid regex");
     let mut patch = Patch::default();
     let mut current_file_diff: Option<FileDiff> = None;
 
@@ -42,7 +144,7 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
         }
     };
 
-    for (line_number, raw_line) in patch_content.lines().enumerate() {
+    for (line_number, raw_line) in sanitized.lines().enumerate() {
         let line = raw_line;
 
         if line.starts_with("diff --git ") {
@@ -59,18 +161,7 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
                 current_file_diff = Some(FileDiff::default());
             }
             if let Some(diff) = current_file_diff.as_mut() {
-                let path_part = stripped.trim();
-                let path_candidate = if path_part.contains(char::is_whitespace) {
-                    path_part.split_whitespace().last().unwrap_or(path_part)
-                } else {
-                    path_part
-                };
-                let final_path = path_candidate.strip_prefix("a/").unwrap_or(path_candidate);
-                if final_path == "/dev/null" || final_path == "dev/null" {
-                    diff.old_file = "/dev/null".to_string();
-                } else {
-                    diff.old_file = final_path.to_string();
-                }
+                diff.old_file = parse_diff_path(stripped, "a/");
             }
             continue;
         }
@@ -83,19 +174,7 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
                 current_file_diff = Some(FileDiff::default());
             }
             if let Some(diff) = current_file_diff.as_mut() {
-                let path_part = stripped.trim();
-                let path_candidate = if path_part.contains(char::is_whitespace) {
-                    path_part.split_whitespace().last().unwrap_or(path_part)
-                } else {
-                    path_part
-                };
-                let final_path = path_candidate.strip_prefix("b/").unwrap_or(path_candidate);
-                if final_path == "/dev/null" || final_path == "dev/null" {
-                    diff.new_file = "/dev/null".to_string();
-                } else {
-                    diff.new_file = final_path.to_string();
-                }
-
+                diff.new_file = parse_diff_path(stripped, "b/");
                 if diff.old_file.is_empty() {
                     diff.old_file = "/dev/null".to_string();
                 }
@@ -138,15 +217,7 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
             continue;
         }
 
-        if line.starts_with("index ")
-            || line.starts_with("new file mode ")
-            || line.starts_with("deleted file mode ")
-            || line.starts_with("similarity index ")
-            || line.starts_with("rename from ")
-            || line.starts_with("rename to ")
-            || line.starts_with("Binary files ")
-            || line.starts_with("\\ No newline at end of file")
-        {
+        if is_git_metadata(line) {
             continue;
         }
 
