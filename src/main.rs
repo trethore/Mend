@@ -536,7 +536,6 @@ fn handle_results(
     silent: bool,
     revert: bool,
     report: &mut Report,
-    start_instant: Instant,
 ) -> io::Result<()> {
     for result in results {
         match result {
@@ -558,10 +557,11 @@ fn handle_results(
     }
 
     if !results.is_empty() {
+        let apply_start = Instant::now();
         if !dry_run {
             apply_changes(results)?;
         }
-        report.elapsed_ms = Some(start_instant.elapsed().as_millis());
+        report.elapsed_ms = Some(apply_start.elapsed().as_millis());
         if !silent {
             println!("{}", report.summary(dry_run, revert));
         }
@@ -627,7 +627,6 @@ fn main_logic(mut args: Args) -> Result<(), AppError> {
     }
 
     let mut report = Report::default();
-    let overall_start = Instant::now();
     let all_patch_results = process_patch(&patch, &args, &mut report)?;
 
     handle_results(
@@ -636,7 +635,6 @@ fn main_logic(mut args: Args) -> Result<(), AppError> {
         args.silent,
         args.revert,
         &mut report,
-        overall_start,
     )?;
 
     if is_verbose {
