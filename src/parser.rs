@@ -18,32 +18,30 @@ impl std::fmt::Display for ParseError {
     }
 }
 
-fn sanitize_diff(input: &str) -> String {
-    let mut lines: Vec<&str> = input.lines().collect();
-
+fn strip_markdown_fences(input: &str) -> Vec<&str> {
+    let lines: Vec<&str> = input.lines().collect();
     let start_fence_patterns = ["```diff", "```patch", "```"];
-    let mut start_idx = 0;
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if start_fence_patterns.iter().any(|pattern| trimmed == *pattern) {
-            start_idx = i + 1;
-            break;
-        }
-    }
 
-    let mut end_idx = lines.len();
-    if start_idx > 0 {
-        for i in (start_idx..lines.len()).rev() {
-            if lines[i].trim() == "```" {
-                end_idx = i;
-                break;
-            }
-        }
-    }
+    let start_idx = lines
+        .iter()
+        .position(|line| start_fence_patterns.contains(&line.trim()));
 
-    if start_idx > 0 && end_idx > start_idx {
-        lines = lines[start_idx..end_idx].to_vec();
+    if let Some(start) = start_idx {
+        let start_idx = start + 1;
+        let end_idx = lines[start_idx..]
+            .iter()
+            .position(|line| line.trim() == "```")
+            .map(|pos| start_idx + pos)
+            .unwrap_or(lines.len());
+
+        lines[start_idx..end_idx].to_vec()
+    } else {
+        lines
     }
+}
+
+fn sanitize_diff(input: &str) -> String {
+    let lines = strip_markdown_fences(input);
 
     let diff_indicators = ["---", "+++", "@@", "diff --git"];
     let mut result = Vec::new();
@@ -53,7 +51,10 @@ fn sanitize_diff(input: &str) -> String {
     for line in lines {
         let trimmed = line.trim();
 
-        if diff_indicators.iter().any(|marker| trimmed.starts_with(marker)) {
+        if diff_indicators
+            .iter()
+            .any(|marker| trimmed.starts_with(marker))
+        {
             found_any_diff_marker = true;
             result.push(line.to_string());
             if trimmed.starts_with("@@") {
@@ -63,33 +64,66 @@ fn sanitize_diff(input: &str) -> String {
         }
 
         if in_hunk {
-            if !line.is_empty() && !line.starts_with('+') && !line.starts_with('-') && !line.starts_with(' ') {
-                if line.chars().next().map_or(false, |c| c.is_whitespace()) {
+            if !line.is_empty()
+                && !line.starts_with('+')
+                && !line.starts_with('-')
+                && !line.starts_with(' ')
+            {
+                if line.chars().next().is_some_and(|c| c.is_whitespace()) {
                     result.push(line.to_string());
                 } else if trimmed.is_empty() {
                     result.push(String::new());
                 } else {
-                    result.push(format!(" {}", line));
+                    result.push(format!(" {line}"));
                 }
             } else {
                 result.push(line.to_string());
             }
-        } else if found_any_diff_marker {
-            if line.starts_with('+') || line.starts_with('-') || line.starts_with(' ')
-                || trimmed.starts_with("index ")
-                || trimmed.starts_with("new file mode")
-                || trimmed.starts_with("deleted file mode")
-                || trimmed.starts_with("Binary files")
-                || trimmed.starts_with("similarity index")
-                || trimmed.starts_with("rename from")
-                || trimmed.starts_with("rename to")
-                || trimmed.starts_with("\\") {
-                result.push(line.to_string());
-            }
+        } else if found_any_diff_marker
+            && (line.starts_with('+')
+                || line.starts_with('-')
+                || line.starts_with(' ')
+                || is_git_metadata(trimmed))
+        {
+            result.push(line.to_string());
         }
     }
 
     result.join("\n")
+}
+
+const GIT_METADATA_PREFIXES: &[&str] = &[
+    "index ",
+    "new file mode ",
+    "deleted file mode ",
+    "similarity index ",
+    "rename from ",
+    "rename to ",
+    "Binary files ",
+    "\\ No newline at end of file",
+];
+
+fn is_git_metadata(line: &str) -> bool {
+    GIT_METADATA_PREFIXES
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+}
+
+fn parse_diff_path(stripped: &str, prefix: &str) -> String {
+    let path_part = stripped.trim();
+    let path_candidate = if path_part.contains(char::is_whitespace) {
+        path_part.split_whitespace().last().unwrap_or(path_part)
+    } else {
+        path_part
+    };
+    let final_path = path_candidate
+        .strip_prefix(prefix)
+        .unwrap_or(path_candidate);
+    if final_path == "/dev/null" || final_path == "dev/null" {
+        "/dev/null".to_string()
+    } else {
+        final_path.to_string()
+    }
 }
 
 pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
@@ -127,18 +161,7 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
                 current_file_diff = Some(FileDiff::default());
             }
             if let Some(diff) = current_file_diff.as_mut() {
-                let path_part = stripped.trim();
-                let path_candidate = if path_part.contains(char::is_whitespace) {
-                    path_part.split_whitespace().last().unwrap_or(path_part)
-                } else {
-                    path_part
-                };
-                let final_path = path_candidate.strip_prefix("a/").unwrap_or(path_candidate);
-                if final_path == "/dev/null" || final_path == "dev/null" {
-                    diff.old_file = "/dev/null".to_string();
-                } else {
-                    diff.old_file = final_path.to_string();
-                }
+                diff.old_file = parse_diff_path(stripped, "a/");
             }
             continue;
         }
@@ -151,19 +174,7 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
                 current_file_diff = Some(FileDiff::default());
             }
             if let Some(diff) = current_file_diff.as_mut() {
-                let path_part = stripped.trim();
-                let path_candidate = if path_part.contains(char::is_whitespace) {
-                    path_part.split_whitespace().last().unwrap_or(path_part)
-                } else {
-                    path_part
-                };
-                let final_path = path_candidate.strip_prefix("b/").unwrap_or(path_candidate);
-                if final_path == "/dev/null" || final_path == "dev/null" {
-                    diff.new_file = "/dev/null".to_string();
-                } else {
-                    diff.new_file = final_path.to_string();
-                }
-
+                diff.new_file = parse_diff_path(stripped, "b/");
                 if diff.old_file.is_empty() {
                     diff.old_file = "/dev/null".to_string();
                 }
@@ -206,15 +217,7 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
             continue;
         }
 
-        if line.starts_with("index ")
-            || line.starts_with("new file mode ")
-            || line.starts_with("deleted file mode ")
-            || line.starts_with("similarity index ")
-            || line.starts_with("rename from ")
-            || line.starts_with("rename to ")
-            || line.starts_with("Binary files ")
-            || line.starts_with("\\ No newline at end of file")
-        {
+        if is_git_metadata(line) {
             continue;
         }
 
