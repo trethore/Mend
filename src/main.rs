@@ -217,24 +217,81 @@ struct PatcherOptions {
     match_threshold: f32,
 }
 
+fn detect_line_ending(content: &str) -> &'static str {
+    if content.contains("\r\n") {
+        "\r\n"
+    } else if content.contains('\r') {
+        "\r"
+    } else {
+        "\n"
+    }
+}
+
+fn has_trailing_newline(content: &str) -> bool {
+    content.ends_with('\n') || content.ends_with('\r')
+}
+
+fn rebuild_file_content(lines: &[String], line_ending: &str, had_trailing_newline: bool) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut content = lines.join(line_ending);
+    if had_trailing_newline {
+        content.push_str(line_ending);
+    }
+    content
+}
+
 fn resolve_file_diff_interactively(
     file_diff: &FileDiff,
     cli_target_path: &Option<String>,
     options: &PatcherOptions,
     report: &mut Report,
 ) -> Result<Option<FilePatchResult>, PatchError> {
-    let old_path = cli_target_path
-        .clone()
-        .unwrap_or_else(|| file_diff.old_file.clone());
-    let new_path = cli_target_path
-        .clone()
-        .unwrap_or_else(|| file_diff.new_file.clone());
-    if old_path.is_empty() && new_path != "/dev/null" {
+    let override_path = cli_target_path.as_ref();
+    let old_path = if file_diff.old_file == "/dev/null" {
+        "/dev/null".to_string()
+    } else if let Some(path) = override_path {
+        path.clone()
+    } else {
+        file_diff.old_file.clone()
+    };
+    let new_path = if file_diff.new_file == "/dev/null" {
+        "/dev/null".to_string()
+    } else if let Some(path) = override_path {
+        path.clone()
+    } else {
+        file_diff.new_file.clone()
+    };
+
+    let is_creation = old_path == "/dev/null";
+    let is_deletion = new_path == "/dev/null";
+    let display_path = if old_path == "/dev/null" {
+        new_path.clone()
+    } else {
+        old_path.clone()
+    };
+
+    if is_creation && new_path.is_empty() {
+        return Err(PatchError::IOError(
+            "Could not determine target file for file creation. Please specify the target file: `mend <TARGET_FILE> [DIFF_FILE]`".to_string()
+        ));
+    }
+
+    if is_deletion && old_path.is_empty() {
+        return Err(PatchError::IOError(
+            "Could not determine target file for deletion. Please specify the target file: `mend <TARGET_FILE> [DIFF_FILE]`".to_string()
+        ));
+    }
+
+    if old_path.is_empty() && !is_creation {
         return Err(PatchError::IOError("Could not determine target file. The diff has no file headers. Please specify the target file: `mend <TARGET_FILE> [DIFF_FILE]`".to_string()));
     }
-    if new_path == "/dev/null" {
-        return Ok(Some(FilePatchResult::Deleted { path: old_path }));
-    }
+
+    let mut line_ending: &'static str = "\n";
+    let mut had_trailing_newline = false;
+
     let mut source_lines: Vec<String> = if old_path == "/dev/null" {
         Vec::new()
     } else {
@@ -248,13 +305,13 @@ fn resolve_file_diff_interactively(
         if is_binary(path).unwrap_or(false) {
             report
                 .warnings
-                .push(format!("Skipped binary file: {old_path}"));
+                .push(format!("Skipped binary file: {display_path}"));
             return Ok(None);
         }
-        fs::read_to_string(path)?
-            .lines()
-            .map(String::from)
-            .collect()
+        let content = fs::read_to_string(path)?;
+        line_ending = detect_line_ending(&content);
+        had_trailing_newline = has_trailing_newline(&content);
+        content.lines().map(String::from).collect()
     };
 
     let clean_source_map: Vec<(usize, String)> = source_lines
@@ -282,7 +339,7 @@ fn resolve_file_diff_interactively(
             if possible_matches.is_empty() {
                 if options.ci || options.silent {
                     return Err(PatchError::HunkApplicationFailed {
-                        file_path: new_path.clone(),
+                        file_path: display_path.clone(),
                         hunk_index: i,
                         reason: "No matching context found in CI mode.".to_string(),
                     });
@@ -290,7 +347,7 @@ fn resolve_file_diff_interactively(
                 eprintln!(
                     "[ERROR] Failed to apply hunk {} for file {}. No matching context found.",
                     i + 1,
-                    new_path
+                    display_path
                 );
                 eprintln!("Do you want to [s]kip this hunk or [a]bort the process? (s/a)");
                 let choice = read_user_input();
@@ -299,7 +356,7 @@ fn resolve_file_diff_interactively(
                     break;
                 } else if choice.to_lowercase() == "a" {
                     return Err(PatchError::HunkApplicationFailed {
-                        file_path: new_path.clone(),
+                        file_path: display_path.clone(),
                         hunk_index: i,
                         reason: "User aborted due to unresolvable hunk.".to_string(),
                     });
@@ -310,14 +367,14 @@ fn resolve_file_diff_interactively(
             } else if possible_matches.len() > 1 {
                 if options.ci || options.silent {
                     return Err(PatchError::AmbiguousMatch {
-                        file_path: new_path.clone(),
+                        file_path: display_path.clone(),
                         hunk_index: i,
                     });
                 }
                 eprintln!(
                     "[ERROR] Ambiguous match for hunk {} in file {}. Possible locations:",
                     i + 1,
-                    new_path
+                    display_path
                 );
                 for (idx, m) in possible_matches.iter().enumerate() {
                     print_match_context(&source_lines, m, idx + 1);
@@ -331,7 +388,7 @@ fn resolve_file_diff_interactively(
                     break;
                 } else if choice.to_lowercase() == "a" {
                     return Err(PatchError::AmbiguousMatch {
-                        file_path: new_path.clone(),
+                        file_path: display_path.clone(),
                         hunk_index: i,
                     });
                 } else if let Ok(index) = choice.parse::<usize>() {
@@ -341,7 +398,7 @@ fn resolve_file_diff_interactively(
                             report.warnings.push(format!(
                                 "Hunk {} in '{}' was applied with a fuzzy match score ({:.2}). Please review.",
                                 i + 1,
-                                new_path,
+                                display_path,
                                 chosen_match.score
                             ));
                         }
@@ -368,7 +425,7 @@ fn resolve_file_diff_interactively(
                     eprintln!(
                         "[INFO] Found a single match for hunk {} in file {}.",
                         i + 1,
-                        new_path
+                        display_path
                     );
                     print_match_context(&source_lines, chosen_match, 1);
                     eprintln!("\nApply this hunk? [y]es, [s]kip, [a]bort (y/s/a)");
@@ -378,7 +435,7 @@ fn resolve_file_diff_interactively(
                             report.warnings.push(format!(
                                 "Hunk {} in '{}' was applied with a fuzzy match score ({:.2}). Please review.",
                                 i + 1,
-                                new_path,
+                                display_path,
                                 chosen_match.score
                             ));
                         }
@@ -409,7 +466,7 @@ fn resolve_file_diff_interactively(
                         report.warnings.push(format!(
                             "Hunk {} in '{}' was applied with a fuzzy match score ({:.2}). Please review.",
                             i + 1,
-                            new_path,
+                            display_path,
                             chosen_match.score
                         ));
                     }
@@ -426,12 +483,14 @@ fn resolve_file_diff_interactively(
             }
         }
     }
-    let new_content = source_lines.join("\n");
-    if old_path == "/dev/null" {
+    let new_content = rebuild_file_content(&source_lines, line_ending, had_trailing_newline);
+    if is_creation {
         Ok(Some(FilePatchResult::Created {
             path: new_path,
             new_content,
         }))
+    } else if is_deletion {
+        Ok(Some(FilePatchResult::Deleted { path: old_path }))
     } else {
         Ok(Some(FilePatchResult::Modified {
             path: new_path,
@@ -571,12 +630,21 @@ fn handle_results(
     Ok(())
 }
 
-fn main_logic(mut args: Args) -> Result<(), AppError> {
-    let is_verbose = (args.verbose || args.debug) && !args.silent;
-
-    if !args.clipboard && args.target_file.is_some() && args.diff_file.is_none() {
+fn promote_target_to_diff_if_appropriate(args: &mut Args, stdin_is_terminal: bool) {
+    if !args.clipboard
+        && stdin_is_terminal
+        && args.target_file.is_some()
+        && args.diff_file.is_none()
+    {
         args.diff_file = args.target_file.take();
     }
+}
+
+fn main_logic(mut args: Args) -> Result<(), AppError> {
+    let stdin_is_terminal = io::stdin().is_terminal();
+    let is_verbose = (args.verbose || args.debug) && !args.silent;
+
+    promote_target_to_diff_if_appropriate(&mut args, stdin_is_terminal);
 
     if is_verbose {
         println!("mend: A fuzzy diff applicator");
@@ -658,5 +726,61 @@ fn main() {
     if let Err(e) = run() {
         eprintln!("[ERROR] {e}");
         process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_args() -> Args {
+        Args {
+            target_file: None,
+            diff_file: None,
+            clipboard: false,
+            revert: false,
+            ci: false,
+            confirm: false,
+            debug: false,
+            dry_run: false,
+            example: false,
+            fuzziness: 2,
+            match_threshold: 0.7,
+            verbose: false,
+            silent: false,
+        }
+    }
+
+    #[test]
+    fn test_promote_target_to_diff_only_when_stdin_terminal() {
+        let mut args = Args {
+            target_file: Some("src/main.rs".into()),
+            ..base_args()
+        };
+
+        promote_target_to_diff_if_appropriate(&mut args, true);
+        assert!(args.diff_file.is_some());
+        assert!(args.target_file.is_none());
+
+        args.target_file = Some("src/lib.rs".into());
+        args.diff_file = None;
+        promote_target_to_diff_if_appropriate(&mut args, false);
+        assert!(args.diff_file.is_none());
+        assert!(args.target_file.is_some());
+    }
+
+    #[test]
+    fn test_detect_line_ending_prefers_crlf() {
+        assert_eq!(detect_line_ending("line1\r\nline2\r\n"), "\r\n");
+        assert_eq!(detect_line_ending("line1\nline2"), "\n");
+    }
+
+    #[test]
+    fn test_rebuild_file_content_preserves_trailing_newline() {
+        let content = rebuild_file_content(&["line1".into(), "line2".into()], "\r\n", true);
+        assert_eq!(content, "line1\r\nline2\r\n");
+
+        let no_newline = rebuild_file_content(&["only".into()], "\n", false);
+        assert_eq!(no_newline, "only");
     }
 }
