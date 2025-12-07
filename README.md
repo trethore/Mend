@@ -8,20 +8,21 @@ Where standard `patch` tools fail due to incorrect line numbers or slightly-off 
 
 ## Features
 
--   **Interactive Conflict Resolution:** Never get stuck on a failed patch again. If `mend` can't find a perfect spot or finds multiple possibilities, it prompts you to choose the correct location, skip the problematic hunk, or abort safely.
--   **CI/Scripting Friendly:** Use the `--ci` flag to run `mend` in non-interactive mode. It will fail with a non-zero exit code on any ambiguity or error, making it perfect for automated workflows.
--   **Clipboard & Stdin Support:** Paste a diff directly from your clipboard with `-c` or pipe it in from other tools like `git diff` or `cat`.
+- **Interactive Conflict Resolution:** Never get stuck on a failed patch again. If `mend` can't find a perfect spot or finds multiple possibilities, it prompts you to choose the correct location, skip the problematic hunk, or abort safely.
+- **CI/Scripting Friendly:** Use the `--ci` flag to run `mend` in non-interactive mode. It will fail with a non-zero exit code on any ambiguity or error, making it perfect for automated workflows.
+- **Clipboard & Stdin Support:** Paste a diff directly from your clipboard with `-c` or pipe it in from other tools like `git diff` or `cat`.
 
--   **Powerful Fuzzy Matching Engine:** A multi-stage algorithm that finds the correct patch location even with formatting changes, modified context lines, or other LLM-induced noise.
-    -   **Level 0 (Strict):** An exact, line-by-line match.
-    -   **Level 1 (Whitespace Insensitive):** Ignores leading/trailing whitespace and empty lines.
-    -   **Level 2 (Anchor-Point Heuristic):** Uses the first and last lines of a change block as anchors to find the location, even if the content in between has been slightly modified.
+- **Powerful Fuzzy Matching Engine:** A multi-stage algorithm that finds the correct patch location even with formatting changes, modified context lines, or other LLM-induced noise.
 
--   **Full `git diff` Support:** Seamlessly handles file creations, deletions, and modifications within a single patch file. It even creates parent directories for new files automatically.
+  - **Level 0 (Strict):** An exact, line-by-line match.
+  - **Level 1 (Whitespace Insensitive):** Ignores leading/trailing whitespace and empty lines.
+  - **Level 2 (Anchor-Point Heuristic):** Uses the first and last lines of a change block as anchors to find the location, even if the content in between has been slightly modified.
 
--   **Robust Parser:** Intelligently ignores conversational artifacts, malformed headers, and other junk that LLMs sometimes include in diff code blocks.
+- **Full `git diff` Support:** Seamlessly handles file creations, deletions, and modifications within a single patch file. It even creates parent directories for new files automatically.
 
--   **Safe and Predictable:** Applies changes only after the entire patch is successfully resolved. Use the `--dry-run` flag to preview all intended changes without touching your files.
+- **Robust Parser:** Intelligently ignores conversational artifacts, malformed headers, and other junk that LLMs sometimes include in diff code blocks.
+
+- **Safe and Predictable:** Applies changes only after the entire patch is successfully resolved. Use the `--dry-run` flag to preview all intended changes without touching your files.
 
 ## Installation
 
@@ -36,6 +37,7 @@ git clone https://github.com/trethore/Mend.git
 cd mend
 cargo install --path .
 ```
+
 Now you can run `mend` from anywhere in your terminal.
 
 #### Using the install script (for system-wide installation)
@@ -60,6 +62,7 @@ mend my_changes.diff
 ```
 
 You can also specify the original file explicitly, which is useful if the diff has no headers or the patch contains changes for multiple files.
+
 ```bash
 # Apply diff contents in 'my_changes.diff' to the file 'path/to/original_file'
 mend path/to/original_file my_changes.diff
@@ -140,6 +143,7 @@ mend -r my_changes.diff
 ```
 
 <!-- ADDITION START -->
+
 ### Use in Scripts and CI
 
 `--ci` (CI mode): run `mend` non-interactively. In this mode, any ambiguous or failed hunk will cause `mend` to exit with a non-zero status rather than prompting for input. Use `--ci` when running in automated pipelines.
@@ -176,6 +180,7 @@ mend --example
 If a patch hunk is ambiguous or cannot be applied, `mend` will prompt you for input.
 
 **Ambiguous Match:**
+
 ```
 [ERROR] Ambiguous match for hunk 1 in file src/main.rs. Possible locations:
 
@@ -199,6 +204,7 @@ Enter the index of the correct location, [s]kip this hunk, or [a]bort:
 ```
 
 **Failed Match:**
+
 ```
 [ERROR] Failed to apply hunk 2 for file src/main.rs. No matching context found.
 Do you want to [s]kip this hunk or [a]bort the process? (s/a)
@@ -210,25 +216,25 @@ Do you want to [s]kip this hunk or [a]bort the process? (s/a)
 
 #### **Arguments:**
 
--   `[TARGET_FILE]`: (Optional) The path to the file to be patched. If provided, `mend` will only apply hunks from the diff that match this file. If omitted, it will process all files from the diff headers.
--   `[DIFF_FILE]`: (Optional) The path to the diff/patch file. If omitted, `mend` reads from standard input.
+- `[TARGET_FILE]`: (Optional) The path to the file to be patched. If provided, `mend` will only apply hunks from the diff that match this file. If omitted, it will process all files from the diff headers.
+- `[DIFF_FILE]`: (Optional) The path to the diff/patch file. If omitted, `mend` reads from standard input.
 
 #### **Options (quick reference):**
 
--   `-c, --clipboard`: Read the diff content from the system clipboard.
--   `--ci`: Run in non-interactive "CI" mode. Any ambiguous or failed hunk causes an error (non-zero exit) instead of prompting.
--   `--confirm`: Require interactive confirmation for every hunk, even perfect matches.
--   `-r, --revert`: Invert the given diff and apply it (useful to undo a previous patch).
--   `--dry-run`: Preview all changes without writing to disk.
--   `--debug`: Enable detailed debug logs. Debug enables verbose internal logs and is intended for troubleshooting; it keeps the run interactive unless `--ci` or `--silent` is also used.
--   `--example`: Print an example diff to the console and exit.
--   `-s, --silent`: Suppress success output (prints nothing on success). In interactive contexts, `--silent` will also cause ambiguous/failed hunks to error rather than prompt. Conflicts with `--verbose`, `--debug`, and `--confirm`.
--   `-v, --verbose`: Enable verbose logging to see which files and hunks are being processed.
--   `-f, --fuzziness <LEVEL>`: Manually set the matching strategy. Default: `2`.
-    -   `0`: Strict mode only (exact match).
-    -   `1`: Allows whitespace and empty line differences.
-    -   `2`: Enables all strategies, including the anchor-point heuristic.
--   `-m, --match-threshold <SCORE>`: Sets the minimum score (from `0.0` to `1.0`) required for a match when using the Level 2 heuristic. Default: `0.7`.
+- `-c, --clipboard`: Read the diff content from the system clipboard.
+- `--ci`: Run in non-interactive "CI" mode. Any ambiguous or failed hunk causes an error (non-zero exit) instead of prompting.
+- `--confirm`: Require interactive confirmation for every hunk, even perfect matches.
+- `-r, --revert`: Invert the given diff and apply it (useful to undo a previous patch).
+- `--dry-run`: Preview all changes without writing to disk.
+- `--debug`: Enable detailed debug logs. Debug enables verbose internal logs and is intended for troubleshooting; it keeps the run interactive unless `--ci` or `--silent` is also used.
+- `--example`: Print an example diff to the console and exit.
+- `-s, --silent`: Suppress success output (prints nothing on success). In interactive contexts, `--silent` will also cause ambiguous/failed hunks to error rather than prompt. Conflicts with `--verbose`, `--debug`, and `--confirm`.
+- `-v, --verbose`: Enable verbose logging to see which files and hunks are being processed.
+- `-f, --fuzziness <LEVEL>`: Manually set the matching strategy. Default: `2`.
+  - `0`: Strict mode only (exact match).
+  - `1`: Allows whitespace and empty line differences.
+  - `2`: Enables all strategies, including the anchor-point heuristic.
+- `-m, --match-threshold <SCORE>`: Sets the minimum score (from `0.0` to `1.0`) required for a match when using the Level 2 heuristic. Default: `0.7`.
 
 For automation, prefer `--ci` (make runs non-interactive). Add `--silent` for quiet CI runs where only exit codes and stderr matter.
 
@@ -237,6 +243,7 @@ For automation, prefer `--ci` (make runs non-interactive). Add `--silent` for qu
 `mend` operates on a simple but powerful principle: **trust the content, not the coordinates.** It parses the context lines (` `) and removal lines (`-`) from a diff hunk and searches for that block of text in the original file.
 
 This search happens in stages to maximize accuracy and speed:
+
 1.  **Strict Search:** First, it looks for a perfect, character-for-character match.
 2.  **Whitespace-Insensitive Search:** If that fails, it normalizes whitespace and ignores blank lines to find a match.
 3.  **Anchor-Point Heuristic:** As a final attempt, it uses the first and last lines of the hunk as "anchors" and searches for a region in the file that contains both, scoring the content in between for similarity. This makes it resilient to incorrect line numbers and modified context that LLMs often produce.

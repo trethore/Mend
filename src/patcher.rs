@@ -156,20 +156,12 @@ fn find_best_anchor_in_slice<'a>(slice: &[&'a String]) -> Option<&'a String> {
         .max_by_key(|l| l.trim().len())
 }
 
-pub fn find_hunk_location(
+pub fn find_strict_match(
     source_lines: &[String],
-    clean_source_map: &[(usize, String)],
-    clean_index_map: &HashMap<String, Vec<usize>>,
     hunk: &Hunk,
-    fuzziness: u8,
+    min_line: usize,
     debug_mode: bool,
-    match_threshold: f32,
 ) -> Vec<HunkMatch> {
-    let total_start = if debug_mode {
-        Some(Instant::now())
-    } else {
-        None
-    };
     let anchor_lines: Vec<&String> = hunk
         .lines
         .iter()
@@ -179,36 +171,30 @@ pub fn find_hunk_location(
         })
         .collect();
 
-    let mut matches = Vec::new();
-
     if anchor_lines.is_empty() {
-        matches.push(HunkMatch {
-            start_index: hunk.old_start,
+        return vec![HunkMatch {
+            start_index: hunk.old_start.max(min_line),
             matched_length: 0,
             score: 1.0,
             density: 1.0,
-        });
-        return matches;
+        }];
     }
 
     if debug_mode {
-        println!("[DEBUG]   -> Trying strict match...");
+        println!("[DEBUG]   -> Trying strict match (min_line: {min_line})...");
     }
     let strict_start = if debug_mode {
         Some(Instant::now())
     } else {
         None
     };
-    if let Some(start_index) = source_lines
+
+    // We only search starting from min_line
+    if let Some(offset_index) = source_lines[min_line..]
         .windows(anchor_lines.len())
         .position(|window| window.iter().zip(anchor_lines.iter()).all(|(s, a)| s == *a))
     {
-        matches.push(HunkMatch {
-            start_index,
-            matched_length: anchor_lines.len(),
-            score: 1.0,
-            density: 1.0,
-        });
+        let start_index = min_line + offset_index;
         if let Some(s) = strict_start {
             if debug_mode {
                 println!(
@@ -217,8 +203,14 @@ pub fn find_hunk_location(
                 );
             }
         }
-        return matches;
+        return vec![HunkMatch {
+            start_index,
+            matched_length: anchor_lines.len(),
+            score: 1.0,
+            density: 1.0,
+        }];
     }
+
     if let Some(s) = strict_start {
         if debug_mode {
             println!(
@@ -227,40 +219,88 @@ pub fn find_hunk_location(
             );
         }
     }
+    Vec::new()
+}
 
-    if fuzziness == 0 {
-        return matches;
+#[derive(Debug, Clone, Copy)]
+pub struct MatchOptions {
+    pub fuzziness: u8,
+    pub min_line: usize,
+    pub debug_mode: bool,
+    pub match_threshold: f32,
+}
+
+pub fn find_fuzzy_match(
+    source_lines: &[String],
+    clean_source_map: &[(usize, String)],
+    clean_index_map: &HashMap<String, Vec<usize>>,
+    hunk: &Hunk,
+    options: MatchOptions,
+) -> Vec<HunkMatch> {
+    let anchor_lines: Vec<&String> = hunk
+        .lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Context(text) | Line::Removal(text) => Some(text),
+            Line::Addition(_) => None,
+        })
+        .collect();
+
+    if anchor_lines.is_empty() {
+        return vec![HunkMatch {
+            start_index: hunk.old_start.max(options.min_line),
+            matched_length: 0,
+            score: 1.0,
+            density: 1.0,
+        }];
     }
 
-    let clean_anchor: Vec<&str> = anchor_lines
+    let mut matches = Vec::new();
+
+    let clean_anchor_strings: Vec<String> = anchor_lines
         .iter()
-        .map(|s| s.trim())
+        .map(|s| normalize_line(s))
         .filter(|s| !s.is_empty())
         .collect();
+    let clean_anchor: Vec<&str> = clean_anchor_strings.iter().map(|s| s.as_str()).collect();
 
     if clean_anchor.is_empty() {
         return matches;
     }
 
-    if fuzziness >= 1 {
-        if debug_mode {
-            println!("[DEBUG]   -> Trying whitespace-insensitive match...");
+    if options.fuzziness >= 1 {
+        if options.debug_mode {
+            println!(
+                "[DEBUG]   -> Trying whitespace-insensitive match (min_line: {})...",
+                options.min_line
+            );
         }
-        let ws_start = if debug_mode {
+        let ws_start = if options.debug_mode {
             Some(Instant::now())
         } else {
             None
         };
 
-        let clean_source_lines: Vec<&str> =
-            clean_source_map.iter().map(|(_, s)| s.as_str()).collect();
+        let start_pos = clean_source_map.partition_point(|(idx, _)| *idx < options.min_line);
 
-        for (clean_start_idx, window) in clean_source_lines.windows(clean_anchor.len()).enumerate()
+        let relevant_clean_source: Vec<&str> = clean_source_map[start_pos..]
+            .iter()
+            .map(|(_, s)| s.as_str())
+            .collect();
+
+        for (clean_start_idx, window) in relevant_clean_source
+            .windows(clean_anchor.len())
+            .enumerate()
         {
             if window == clean_anchor.as_slice() {
-                let original_start_index = clean_source_map[clean_start_idx].0;
+                let map_idx = start_pos + clean_start_idx;
+                let original_start_index = clean_source_map[map_idx].0;
 
-                let clean_end_idx = clean_start_idx + clean_anchor.len() - 1;
+                if original_start_index < options.min_line {
+                    continue;
+                }
+
+                let clean_end_idx = map_idx + clean_anchor.len() - 1;
                 let original_end_index = clean_source_map[clean_end_idx].0;
 
                 let matched_length = original_end_index - original_start_index + 1;
@@ -280,10 +320,10 @@ pub fn find_hunk_location(
         }
 
         if !matches.is_empty() {
-            apply_proximity_bonus(&mut matches, hunk.old_start, debug_mode);
+            apply_proximity_bonus(&mut matches, hunk.old_start, options.debug_mode);
             let deduped = deduplicate_matches(matches);
             if let Some(s) = ws_start {
-                if debug_mode {
+                if options.debug_mode {
                     println!(
                         "[DEBUG]   -> Whitespace-insensitive: {} match(es) in {}ms",
                         deduped.len(),
@@ -294,7 +334,7 @@ pub fn find_hunk_location(
             return deduped;
         }
         if let Some(s) = ws_start {
-            if debug_mode {
+            if options.debug_mode {
                 println!(
                     "[DEBUG]   -> Whitespace-insensitive: 0 matches in {}ms",
                     s.elapsed().as_millis()
@@ -303,11 +343,14 @@ pub fn find_hunk_location(
         }
     }
 
-    if fuzziness >= 2 {
-        if debug_mode {
-            println!("[DEBUG]   -> Trying anchor-point heuristic match...");
+    if options.fuzziness >= 2 {
+        if options.debug_mode {
+            println!(
+                "[DEBUG]   -> Trying anchor-point heuristic match (min_line: {})...",
+                options.min_line
+            );
         }
-        let anchor_start = if debug_mode {
+        let anchor_start = if options.debug_mode {
             Some(Instant::now())
         } else {
             None
@@ -328,7 +371,7 @@ pub fn find_hunk_location(
         let adaptive_window = anchor_lines.len() + std::cmp::max(10, 4 * change_magnitude);
         let search_window_size = std::cmp::min(adaptive_window, 400);
 
-        if debug_mode {
+        if options.debug_mode {
             println!("[DEBUG]     - Adaptive search window size: {search_window_size}");
         }
 
@@ -352,13 +395,18 @@ pub fn find_hunk_location(
         };
 
         let top_anchor_indent = get_indentation(top_anchor_original);
-        let top_anchor = top_anchor_original.trim();
-        let bottom_anchor = bottom_anchor_original.trim();
+        let top_anchor_string = normalize_line(top_anchor_original);
+        let top_anchor = top_anchor_string.as_str();
+        let bottom_anchor_string = normalize_line(bottom_anchor_original);
+        let bottom_anchor = bottom_anchor_string.as_str();
 
         if let Some(top_positions) = clean_index_map.get(top_anchor) {
             if let Some(bottom_positions) = clean_index_map.get(bottom_anchor) {
                 let mut candidates_considered: usize = 0;
                 for &original_idx_top in top_positions {
+                    if original_idx_top < options.min_line {
+                        continue;
+                    }
                     let search_window_end =
                         (original_idx_top + search_window_size).min(source_lines.len());
 
@@ -380,7 +428,7 @@ pub fn find_hunk_location(
                             1.0
                         };
                         let upper_bound = (0.7 * 1.0) + (0.3 * max_density);
-                        if upper_bound < match_threshold {
+                        if upper_bound < options.match_threshold {
                             continue;
                         }
 
@@ -395,14 +443,14 @@ pub fn find_hunk_location(
                         if top_anchor_indent == candidate_indent {
                             let original_score = score;
                             score = (score + 0.05).min(1.0);
-                            if debug_mode && score > original_score {
+                            if options.debug_mode && score > original_score {
                                 println!(
                                     "[DEBUG]     - Indentation bonus applied. Score: {original_score:.2} -> {score:.2}"
                                 );
                             }
                         }
 
-                        if debug_mode {
+                        if options.debug_mode {
                             println!(
                                 "[DEBUG]     - Candidate at lines {}-{} scored {:.2} (LCS: {:.2}, Density: {:.2})",
                                 start_index + 1,
@@ -413,7 +461,7 @@ pub fn find_hunk_location(
                             );
                         }
 
-                        if score >= match_threshold {
+                        if score >= options.match_threshold {
                             matches.push(HunkMatch {
                                 start_index,
                                 matched_length: length,
@@ -424,7 +472,7 @@ pub fn find_hunk_location(
                     }
                 }
                 if let Some(s) = anchor_start {
-                    if debug_mode {
+                    if options.debug_mode {
                         println!(
                             "[DEBUG]   -> Anchor heuristic: {} candidate pairs, {} kept, in {}ms",
                             candidates_considered,
@@ -437,18 +485,36 @@ pub fn find_hunk_location(
         }
     }
 
-    apply_proximity_bonus(&mut matches, hunk.old_start, debug_mode);
-    let deduped = deduplicate_matches(matches);
-    if let Some(s) = total_start {
-        if debug_mode {
-            println!(
-                "[DEBUG]   -> Total matching: {} final match(es) in {}ms",
-                deduped.len(),
-                s.elapsed().as_millis()
-            );
-        }
+    apply_proximity_bonus(&mut matches, hunk.old_start, options.debug_mode);
+    deduplicate_matches(matches)
+}
+
+pub fn find_hunk_location(
+    source_lines: &[String],
+    clean_source_map: &[(usize, String)],
+    clean_index_map: &HashMap<String, Vec<usize>>,
+    hunk: &Hunk,
+    fuzziness: u8,
+    debug_mode: bool,
+    match_threshold: f32,
+) -> Vec<HunkMatch> {
+    // Legacy wrapper that tries strict then fuzzy, assuming min_line = 0
+    let strict = find_strict_match(source_lines, hunk, 0, debug_mode);
+    if !strict.is_empty() {
+        return strict;
     }
-    deduped
+    find_fuzzy_match(
+        source_lines,
+        clean_source_map,
+        clean_index_map,
+        hunk,
+        MatchOptions {
+            fuzziness,
+            min_line: 0,
+            debug_mode,
+            match_threshold,
+        },
+    )
 }
 
 fn calculate_match_score(clean_anchor: &[&str], candidate_block: &[String]) -> f32 {
@@ -456,10 +522,14 @@ fn calculate_match_score(clean_anchor: &[&str], candidate_block: &[String]) -> f
         return 1.0;
     }
 
-    let normalized_candidate: Vec<&str> = candidate_block
+    let normalized_candidate_strings: Vec<String> = candidate_block
         .iter()
-        .map(|s| s.trim())
+        .map(|s| normalize_line(s))
         .filter(|s| !s.is_empty())
+        .collect();
+    let normalized_candidate: Vec<&str> = normalized_candidate_strings
+        .iter()
+        .map(|s| s.as_str())
         .collect();
 
     if normalized_candidate.is_empty() {
@@ -494,5 +564,17 @@ pub fn apply_hunk(
 }
 
 pub fn normalize_line(line: &str) -> String {
-    line.trim().to_string()
+    let mut padded = String::with_capacity(line.len() * 2);
+    for c in line.chars() {
+        if c.is_whitespace() {
+            padded.push(' ');
+        } else if c.is_alphanumeric() || c == '_' {
+            padded.push(c);
+        } else {
+            padded.push(' ');
+            padded.push(c);
+            padded.push(' ');
+        }
+    }
+    padded.split_whitespace().collect::<Vec<&str>>().join(" ")
 }

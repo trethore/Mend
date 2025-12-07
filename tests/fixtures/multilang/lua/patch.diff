@@ -1,0 +1,14 @@
+@@ -1,4 +1,4 @@
+ local config = {
+     enabled = true,
+-    timeout = 30
++    timeout = 60, -- Increased timeout
+ }
+ 
+ function run()
+-    if config.enabled then
+-        print("Running...")
++    if config.enabled == true then
++        print( "Running task..." )
+     end
+ end
