@@ -29,12 +29,14 @@ fn build_clean_maps(lines: &[String]) -> (CleanSourceMap, CleanIndexMap) {
 fn test_intra_line_whitespace_mismatch() {
     // 1. ARRANGE
     // Original has extra spaces inside the function call
-    let original_lines = to_lines(r#"
+    let original_lines = to_lines(
+        r#"
 void func( int a, int b ) {
     return a + b;
 }
-"#);
-    
+"#,
+    );
+
     // Patch expects standard spacing
     let diff_content = r#"
 @@ -1,3 +1,3 @@
@@ -48,7 +50,7 @@ void func( int a, int b ) {
     let hunk = &patch.diffs[0].hunks[0];
 
     let (clean_source_map, clean_index_map) = build_clean_maps(&original_lines);
-    
+
     // 2. ACT
     // Try with fuzziness 1 (Whitespace Insensitive)
     let matches: Vec<HunkMatch> = patcher::find_hunk_location(
@@ -56,7 +58,7 @@ void func( int a, int b ) {
         &clean_source_map,
         &clean_index_map,
         hunk,
-        1, // Fuzziness 1
+        1,    // Fuzziness 1
         true, // Debug on to see output
         0.7,
     );
@@ -66,7 +68,11 @@ void func( int a, int b ) {
     if matches.is_empty() {
         panic!("FAILED: Intra-line whitespace mismatch still causes failure at Level 1.");
     } else {
-        println!("SUCCESS: Found {} match(es)! Best score: {}", matches.len(), matches[0].score);
+        println!(
+            "SUCCESS: Found {} match(es)! Best score: {}",
+            matches.len(),
+            matches[0].score
+        );
         assert!(matches[0].score >= 0.9);
     }
 }

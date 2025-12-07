@@ -261,12 +261,8 @@ fn resolve_file_diff_interactively(
 
     for (i, hunk) in file_diff.hunks.iter().enumerate() {
         loop {
-             let mut possible_matches = patcher::find_strict_match(
-                &source_lines,
-                hunk,
-                min_line,
-                options.debug_mode,
-            );
+            let mut possible_matches =
+                patcher::find_strict_match(&source_lines, hunk, min_line, options.debug_mode);
 
             if possible_matches.is_empty() && options.fuzziness > 0 {
                 let clean_source_map: Vec<(usize, String)> = source_lines
@@ -369,9 +365,18 @@ fn resolve_file_diff_interactively(
                             chosen_match.start_index,
                             chosen_match.matched_length,
                         );
-                        let hunk_new_lines_count = hunk.lines.iter().filter(|l| matches!(l, mend::diff::Line::Context(_) | mend::diff::Line::Addition(_))).count();
+                        let hunk_new_lines_count = hunk
+                            .lines
+                            .iter()
+                            .filter(|l| {
+                                matches!(
+                                    l,
+                                    mend::diff::Line::Context(_) | mend::diff::Line::Addition(_)
+                                )
+                            })
+                            .count();
                         min_line = chosen_match.start_index + hunk_new_lines_count;
-                        
+
                         break;
                     } else {
                         eprintln!("Invalid index. Please enter a valid number, 's', or 'a'.");
@@ -409,7 +414,16 @@ fn resolve_file_diff_interactively(
                             chosen_match.start_index,
                             chosen_match.matched_length,
                         );
-                        let hunk_new_lines_count = hunk.lines.iter().filter(|l| matches!(l, mend::diff::Line::Context(_) | mend::diff::Line::Addition(_))).count();
+                        let hunk_new_lines_count = hunk
+                            .lines
+                            .iter()
+                            .filter(|l| {
+                                matches!(
+                                    l,
+                                    mend::diff::Line::Context(_) | mend::diff::Line::Addition(_)
+                                )
+                            })
+                            .count();
                         min_line = chosen_match.start_index + hunk_new_lines_count;
                         break;
                     } else if choice.to_lowercase() == "s" {
@@ -442,7 +456,16 @@ fn resolve_file_diff_interactively(
                         chosen_match.start_index,
                         chosen_match.matched_length,
                     );
-                    let hunk_new_lines_count = hunk.lines.iter().filter(|l| matches!(l, mend::diff::Line::Context(_) | mend::diff::Line::Addition(_))).count();
+                    let hunk_new_lines_count = hunk
+                        .lines
+                        .iter()
+                        .filter(|l| {
+                            matches!(
+                                l,
+                                mend::diff::Line::Context(_) | mend::diff::Line::Addition(_)
+                            )
+                        })
+                        .count();
                     min_line = chosen_match.start_index + hunk_new_lines_count;
                     break;
                 }

@@ -245,9 +245,9 @@ pub fn find_fuzzy_match(
             Line::Addition(_) => None,
         })
         .collect();
-    
+
     if anchor_lines.is_empty() {
-         return vec![HunkMatch {
+        return vec![HunkMatch {
             start_index: hunk.old_start.max(options.min_line),
             matched_length: 0,
             score: 1.0,
@@ -270,27 +270,35 @@ pub fn find_fuzzy_match(
 
     if options.fuzziness >= 1 {
         if options.debug_mode {
-            println!("[DEBUG]   -> Trying whitespace-insensitive match (min_line: {})...", options.min_line);
+            println!(
+                "[DEBUG]   -> Trying whitespace-insensitive match (min_line: {})...",
+                options.min_line
+            );
         }
         let ws_start = if options.debug_mode {
             Some(Instant::now())
         } else {
             None
         };
-        
+
         let start_pos = clean_source_map.partition_point(|(idx, _)| *idx < options.min_line);
-        
+
         let relevant_clean_source: Vec<&str> = clean_source_map[start_pos..]
             .iter()
             .map(|(_, s)| s.as_str())
             .collect();
 
-        for (clean_start_idx, window) in relevant_clean_source.windows(clean_anchor.len()).enumerate() {
+        for (clean_start_idx, window) in relevant_clean_source
+            .windows(clean_anchor.len())
+            .enumerate()
+        {
             if window == clean_anchor.as_slice() {
                 let map_idx = start_pos + clean_start_idx;
                 let original_start_index = clean_source_map[map_idx].0;
 
-                if original_start_index < options.min_line { continue; }
+                if original_start_index < options.min_line {
+                    continue;
+                }
 
                 let clean_end_idx = map_idx + clean_anchor.len() - 1;
                 let original_end_index = clean_source_map[clean_end_idx].0;
@@ -337,7 +345,10 @@ pub fn find_fuzzy_match(
 
     if options.fuzziness >= 2 {
         if options.debug_mode {
-            println!("[DEBUG]   -> Trying anchor-point heuristic match (min_line: {})...", options.min_line);
+            println!(
+                "[DEBUG]   -> Trying anchor-point heuristic match (min_line: {})...",
+                options.min_line
+            );
         }
         let anchor_start = if options.debug_mode {
             Some(Instant::now())
@@ -516,7 +527,10 @@ fn calculate_match_score(clean_anchor: &[&str], candidate_block: &[String]) -> f
         .map(|s| normalize_line(s))
         .filter(|s| !s.is_empty())
         .collect();
-    let normalized_candidate: Vec<&str> = normalized_candidate_strings.iter().map(|s| s.as_str()).collect();
+    let normalized_candidate: Vec<&str> = normalized_candidate_strings
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
 
     if normalized_candidate.is_empty() {
         return 0.0;
