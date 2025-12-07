@@ -257,28 +257,44 @@ fn resolve_file_diff_interactively(
             .collect()
     };
 
-    let clean_source_map: Vec<(usize, String)> = source_lines
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (i, patcher::normalize_line(s)))
-        .filter(|(_, s)| !s.is_empty())
-        .collect();
-    let mut clean_index_map: std::collections::HashMap<String, Vec<usize>> =
-        std::collections::HashMap::new();
-    for (idx, norm) in &clean_source_map {
-        clean_index_map.entry(norm.clone()).or_default().push(*idx);
-    }
-    for (i, hunk) in file_diff.hunks.iter().enumerate().rev() {
+    let mut min_line = 0;
+
+    for (i, hunk) in file_diff.hunks.iter().enumerate() {
         loop {
-            let possible_matches = patcher::find_hunk_location(
+             let mut possible_matches = patcher::find_strict_match(
                 &source_lines,
-                &clean_source_map,
-                &clean_index_map,
                 hunk,
-                options.fuzziness,
+                min_line,
                 options.debug_mode,
-                options.match_threshold,
             );
+
+            if possible_matches.is_empty() && options.fuzziness > 0 {
+                let clean_source_map: Vec<(usize, String)> = source_lines
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| (i, patcher::normalize_line(s)))
+                    .filter(|(_, s)| !s.is_empty())
+                    .collect();
+                let mut clean_index_map: std::collections::HashMap<String, Vec<usize>> =
+                    std::collections::HashMap::new();
+                for (idx, norm) in &clean_source_map {
+                    clean_index_map.entry(norm.clone()).or_default().push(*idx);
+                }
+
+                possible_matches = patcher::find_fuzzy_match(
+                    &source_lines,
+                    &clean_source_map,
+                    &clean_index_map,
+                    hunk,
+                    patcher::MatchOptions {
+                        fuzziness: options.fuzziness,
+                        min_line,
+                        debug_mode: options.debug_mode,
+                        match_threshold: options.match_threshold,
+                    },
+                );
+            }
+
             if possible_matches.is_empty() {
                 if options.ci || options.silent {
                     return Err(PatchError::HunkApplicationFailed {
@@ -353,6 +369,9 @@ fn resolve_file_diff_interactively(
                             chosen_match.start_index,
                             chosen_match.matched_length,
                         );
+                        let hunk_new_lines_count = hunk.lines.iter().filter(|l| matches!(l, mend::diff::Line::Context(_) | mend::diff::Line::Addition(_))).count();
+                        min_line = chosen_match.start_index + hunk_new_lines_count;
+                        
                         break;
                     } else {
                         eprintln!("Invalid index. Please enter a valid number, 's', or 'a'.");
@@ -390,6 +409,8 @@ fn resolve_file_diff_interactively(
                             chosen_match.start_index,
                             chosen_match.matched_length,
                         );
+                        let hunk_new_lines_count = hunk.lines.iter().filter(|l| matches!(l, mend::diff::Line::Context(_) | mend::diff::Line::Addition(_))).count();
+                        min_line = chosen_match.start_index + hunk_new_lines_count;
                         break;
                     } else if choice.to_lowercase() == "s" {
                         report.hunks_skipped += 1;
@@ -421,6 +442,8 @@ fn resolve_file_diff_interactively(
                         chosen_match.start_index,
                         chosen_match.matched_length,
                     );
+                    let hunk_new_lines_count = hunk.lines.iter().filter(|l| matches!(l, mend::diff::Line::Context(_) | mend::diff::Line::Addition(_))).count();
+                    min_line = chosen_match.start_index + hunk_new_lines_count;
                     break;
                 }
             }
