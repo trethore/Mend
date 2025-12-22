@@ -156,6 +156,22 @@ fn find_best_anchor_in_slice<'a>(slice: &[&'a String]) -> Option<&'a String> {
         .max_by_key(|l| l.trim().len())
 }
 
+pub type LookupTable = (Vec<(usize, String)>, HashMap<String, Vec<usize>>);
+
+pub fn build_lookup_tables(source_lines: &[String]) -> LookupTable {
+    let clean_source_map: Vec<(usize, String)> = source_lines
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i, normalize_line(s)))
+        .filter(|(_, s)| !s.is_empty())
+        .collect();
+    let mut clean_index_map: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, norm) in &clean_source_map {
+        clean_index_map.entry(norm.clone()).or_default().push(*idx);
+    }
+    (clean_source_map, clean_index_map)
+}
+
 pub fn find_strict_match(
     source_lines: &[String],
     hunk: &Hunk,
@@ -195,13 +211,13 @@ pub fn find_strict_match(
         .position(|window| window.iter().zip(anchor_lines.iter()).all(|(s, a)| s == *a))
     {
         let start_index = min_line + offset_index;
-        if let Some(s) = strict_start {
-            if debug_mode {
-                println!(
-                    "[DEBUG]   -> Strict: 1 match in {}ms",
-                    s.elapsed().as_millis()
-                );
-            }
+        if let Some(s) = strict_start
+            && debug_mode
+        {
+            println!(
+                "[DEBUG]   -> Strict: 1 match in {}ms",
+                s.elapsed().as_millis()
+            );
         }
         return vec![HunkMatch {
             start_index,
@@ -211,13 +227,13 @@ pub fn find_strict_match(
         }];
     }
 
-    if let Some(s) = strict_start {
-        if debug_mode {
-            println!(
-                "[DEBUG]   -> Strict: 0 matches in {}ms",
-                s.elapsed().as_millis()
-            );
-        }
+    if let Some(s) = strict_start
+        && debug_mode
+    {
+        println!(
+            "[DEBUG]   -> Strict: 0 matches in {}ms",
+            s.elapsed().as_millis()
+        );
     }
     Vec::new()
 }
@@ -322,24 +338,24 @@ pub fn find_fuzzy_match(
         if !matches.is_empty() {
             apply_proximity_bonus(&mut matches, hunk.old_start, options.debug_mode);
             let deduped = deduplicate_matches(matches);
-            if let Some(s) = ws_start {
-                if options.debug_mode {
-                    println!(
-                        "[DEBUG]   -> Whitespace-insensitive: {} match(es) in {}ms",
-                        deduped.len(),
-                        s.elapsed().as_millis()
-                    );
-                }
-            }
-            return deduped;
-        }
-        if let Some(s) = ws_start {
-            if options.debug_mode {
+            if let Some(s) = ws_start
+                && options.debug_mode
+            {
                 println!(
-                    "[DEBUG]   -> Whitespace-insensitive: 0 matches in {}ms",
+                    "[DEBUG]   -> Whitespace-insensitive: {} match(es) in {}ms",
+                    deduped.len(),
                     s.elapsed().as_millis()
                 );
             }
+            return deduped;
+        }
+        if let Some(s) = ws_start
+            && options.debug_mode
+        {
+            println!(
+                "[DEBUG]   -> Whitespace-insensitive: 0 matches in {}ms",
+                s.elapsed().as_millis()
+            );
         }
     }
 
@@ -400,87 +416,87 @@ pub fn find_fuzzy_match(
         let bottom_anchor_string = normalize_line(bottom_anchor_original);
         let bottom_anchor = bottom_anchor_string.as_str();
 
-        if let Some(top_positions) = clean_index_map.get(top_anchor) {
-            if let Some(bottom_positions) = clean_index_map.get(bottom_anchor) {
-                let mut candidates_considered: usize = 0;
-                for &original_idx_top in top_positions {
-                    if original_idx_top < options.min_line {
+        if let Some(top_positions) = clean_index_map.get(top_anchor)
+            && let Some(bottom_positions) = clean_index_map.get(bottom_anchor)
+        {
+            let mut candidates_considered: usize = 0;
+            for &original_idx_top in top_positions {
+                if original_idx_top < options.min_line {
+                    continue;
+                }
+                let search_window_end =
+                    (original_idx_top + search_window_size).min(source_lines.len());
+
+                for &original_idx_bottom in bottom_positions {
+                    if original_idx_bottom <= original_idx_top {
                         continue;
                     }
-                    let search_window_end =
-                        (original_idx_top + search_window_size).min(source_lines.len());
+                    if original_idx_bottom >= search_window_end {
+                        break;
+                    }
 
-                    for &original_idx_bottom in bottom_positions {
-                        if original_idx_bottom <= original_idx_top {
-                            continue;
-                        }
-                        if original_idx_bottom >= search_window_end {
-                            break;
-                        }
+                    candidates_considered += 1;
+                    let start_index = original_idx_top;
+                    let length = original_idx_bottom - start_index + 1;
 
-                        candidates_considered += 1;
-                        let start_index = original_idx_top;
-                        let length = original_idx_bottom - start_index + 1;
+                    let max_density = if length > 0 {
+                        clean_anchor.len() as f32 / length as f32
+                    } else {
+                        1.0
+                    };
+                    let upper_bound = (0.7 * 1.0) + (0.3 * max_density);
+                    if upper_bound < options.match_threshold {
+                        continue;
+                    }
 
-                        let max_density = if length > 0 {
-                            clean_anchor.len() as f32 / length as f32
-                        } else {
-                            1.0
-                        };
-                        let upper_bound = (0.7 * 1.0) + (0.3 * max_density);
-                        if upper_bound < options.match_threshold {
-                            continue;
-                        }
+                    let candidate_block = &source_lines[start_index..=original_idx_bottom];
+                    let lcs_score = calculate_match_score(&clean_anchor, candidate_block);
+                    let density = max_density;
 
-                        let candidate_block = &source_lines[start_index..=original_idx_bottom];
-                        let lcs_score = calculate_match_score(&clean_anchor, candidate_block);
-                        let density = max_density;
+                    let mut score = (0.7 * lcs_score) + (0.3 * density);
 
-                        let mut score = (0.7 * lcs_score) + (0.3 * density);
-
-                        let candidate_top_anchor_line = &source_lines[original_idx_top];
-                        let candidate_indent = get_indentation(candidate_top_anchor_line);
-                        if top_anchor_indent == candidate_indent {
-                            let original_score = score;
-                            score = (score + 0.05).min(1.0);
-                            if options.debug_mode && score > original_score {
-                                println!(
-                                    "[DEBUG]     - Indentation bonus applied. Score: {original_score:.2} -> {score:.2}"
-                                );
-                            }
-                        }
-
-                        if options.debug_mode {
+                    let candidate_top_anchor_line = &source_lines[original_idx_top];
+                    let candidate_indent = get_indentation(candidate_top_anchor_line);
+                    if top_anchor_indent == candidate_indent {
+                        let original_score = score;
+                        score = (score + 0.05).min(1.0);
+                        if options.debug_mode && score > original_score {
                             println!(
-                                "[DEBUG]     - Candidate at lines {}-{} scored {:.2} (LCS: {:.2}, Density: {:.2})",
-                                start_index + 1,
-                                original_idx_bottom + 1,
-                                score,
-                                lcs_score,
-                                density
+                                "[DEBUG]     - Indentation bonus applied. Score: {original_score:.2} -> {score:.2}"
                             );
                         }
-
-                        if score >= options.match_threshold {
-                            matches.push(HunkMatch {
-                                start_index,
-                                matched_length: length,
-                                score,
-                                density,
-                            });
-                        }
                     }
-                }
-                if let Some(s) = anchor_start {
+
                     if options.debug_mode {
                         println!(
-                            "[DEBUG]   -> Anchor heuristic: {} candidate pairs, {} kept, in {}ms",
-                            candidates_considered,
-                            matches.len(),
-                            s.elapsed().as_millis()
+                            "[DEBUG]     - Candidate at lines {}-{} scored {:.2} (LCS: {:.2}, Density: {:.2})",
+                            start_index + 1,
+                            original_idx_bottom + 1,
+                            score,
+                            lcs_score,
+                            density
                         );
                     }
+
+                    if score >= options.match_threshold {
+                        matches.push(HunkMatch {
+                            start_index,
+                            matched_length: length,
+                            score,
+                            density,
+                        });
+                    }
                 }
+            }
+            if let Some(s) = anchor_start
+                && options.debug_mode
+            {
+                println!(
+                    "[DEBUG]   -> Anchor heuristic: {} candidate pairs, {} kept, in {}ms",
+                    candidates_considered,
+                    matches.len(),
+                    s.elapsed().as_millis()
+                );
             }
         }
     }
@@ -564,17 +580,34 @@ pub fn apply_hunk(
 }
 
 pub fn normalize_line(line: &str) -> String {
-    let mut padded = String::with_capacity(line.len() * 2);
-    for c in line.chars() {
+    let mut result = String::with_capacity(line.len() * 2);
+    let mut iter = line.chars().peekable();
+    let mut first_token = true;
+
+    while let Some(&c) = iter.peek() {
         if c.is_whitespace() {
-            padded.push(' ');
-        } else if c.is_alphanumeric() || c == '_' {
-            padded.push(c);
+            iter.next();
+            continue;
+        }
+
+        if !first_token {
+            result.push(' ');
+        }
+        first_token = false;
+
+        if c.is_alphanumeric() || c == '_' {
+            while let Some(&k) = iter.peek() {
+                if k.is_alphanumeric() || k == '_' {
+                    result.push(k);
+                    iter.next();
+                } else {
+                    break;
+                }
+            }
         } else {
-            padded.push(' ');
-            padded.push(c);
-            padded.push(' ');
+            result.push(c);
+            iter.next();
         }
     }
-    padded.split_whitespace().collect::<Vec<&str>>().join(" ")
+    result
 }

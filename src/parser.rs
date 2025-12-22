@@ -134,13 +134,13 @@ pub fn parse_patch(patch_content: &str) -> Result<Patch, ParseError> {
     let mut current_file_diff: Option<FileDiff> = None;
 
     let mut save_current_diff = |diff: Option<FileDiff>| {
-        if let Some(mut d) = diff {
-            if !d.hunks.is_empty() {
-                if !d.old_file.is_empty() && d.old_file != "/dev/null" && d.new_file.is_empty() {
-                    d.new_file = "/dev/null".to_string();
-                }
-                patch.diffs.push(d);
+        if let Some(mut d) = diff
+            && !d.hunks.is_empty()
+        {
+            if !d.old_file.is_empty() && d.old_file != "/dev/null" && d.new_file.is_empty() {
+                d.new_file = "/dev/null".to_string();
             }
+            patch.diffs.push(d);
         }
     };
 

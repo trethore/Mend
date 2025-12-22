@@ -265,17 +265,8 @@ fn resolve_file_diff_interactively(
                 patcher::find_strict_match(&source_lines, hunk, min_line, options.debug_mode);
 
             if possible_matches.is_empty() && options.fuzziness > 0 {
-                let clean_source_map: Vec<(usize, String)> = source_lines
-                    .iter()
-                    .enumerate()
-                    .map(|(i, s)| (i, patcher::normalize_line(s)))
-                    .filter(|(_, s)| !s.is_empty())
-                    .collect();
-                let mut clean_index_map: std::collections::HashMap<String, Vec<usize>> =
-                    std::collections::HashMap::new();
-                for (idx, norm) in &clean_source_map {
-                    clean_index_map.entry(norm.clone()).or_default().push(*idx);
-                }
+                let (clean_source_map, clean_index_map) =
+                    patcher::build_lookup_tables(&source_lines);
 
                 possible_matches = patcher::find_fuzzy_match(
                     &source_lines,
@@ -492,10 +483,10 @@ fn apply_changes(results: &[FilePatchResult]) -> io::Result<()> {
                 fs::write(path, new_content)?;
             }
             FilePatchResult::Created { path, new_content } => {
-                if let Some(parent) = Path::new(path).parent() {
-                    if !parent.exists() {
-                        fs::create_dir_all(parent)?;
-                    }
+                if let Some(parent) = Path::new(path).parent()
+                    && !parent.exists()
+                {
+                    fs::create_dir_all(parent)?;
                 }
                 fs::write(path, new_content)?;
             }
